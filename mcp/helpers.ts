@@ -65,7 +65,12 @@ export interface ProjectSummary {
   version: number;
   activePageId: string;
   pages: PageSummary[];
-  palette: Array<Pick<PaletteItem, "id" | "name" | "role" | "layer" | "color" | "description" | "retired">>;
+  palette: Array<
+    Pick<
+      PaletteItem,
+      "id" | "name" | "role" | "layer" | "color" | "description" | "pattern" | "lineStyle" | "retired"
+    >
+  >;
 }
 
 export function summarizeProject(project: ProjectDoc): ProjectSummary {
@@ -81,6 +86,8 @@ export function summarizeProject(project: ProjectDoc): ProjectSummary {
       layer: item.layer,
       color: item.color,
       description: item.description,
+      pattern: item.pattern,
+      lineStyle: item.lineStyle,
       retired: item.retired,
     })),
   };

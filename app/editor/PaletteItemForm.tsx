@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { DESCRIPTION_MAX, NAME_MAX } from "./palette";
+import { DESCRIPTION_MAX, NAME_MAX, type PaletteRole } from "./palette";
 import type { PaletteInput } from "./paletteOps";
+import { ColorPresets, LineStylePicker, PatternPicker } from "./PaletteStyleOptions";
+import { DEFAULT_LINE_STYLE, DEFAULT_PATTERN, type FillPattern, type LineStyle } from "./pattern";
 
 const FIELD =
   "h-7 w-full border border-slate-300 bg-white px-2 text-[12px] text-slate-900 outline-none focus:border-slate-600";
@@ -13,9 +15,13 @@ const LABEL = "text-[10px] font-semibold tracking-wide text-slate-500";
 interface PaletteItemFormProps {
   /** "상태 추가" 처럼 무엇을 하는 칸인지 알려 준다. */
   title: string;
+  /** 분류에 따라 고를 수 있는 스타일이 다르다 — 장비는 테두리, 나머지는 채움. */
+  role: PaletteRole;
   initialName: string;
   initialColor: string;
   initialDescription: string;
+  initialPattern?: FillPattern;
+  initialLineStyle?: LineStyle;
   submitLabel: string;
   /** 문제가 있으면 사용자에게 보일 한 줄을 돌려준다. 성공하면 null. */
   onSubmit: (input: PaletteInput) => string | null;
@@ -27,10 +33,22 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
   const [name, setName] = useState(props.initialName);
   const [color, setColor] = useState(props.initialColor);
   const [description, setDescription] = useState(props.initialDescription);
+  const [pattern, setPattern] = useState<FillPattern>(props.initialPattern ?? DEFAULT_PATTERN);
+  const [lineStyle, setLineStyle] = useState<LineStyle>(props.initialLineStyle ?? DEFAULT_LINE_STYLE);
   const [error, setError] = useState<string | null>(null);
 
+  // 장비는 칸을 채우지 않고 테두리로 보인다. 채움 무늬를 골라도 쓸 곳이 없다.
+  const showPattern = props.role !== "kind";
+  const showLineStyle = props.role === "kind" || props.role === "wire";
+
   const submit = () => {
-    const message = props.onSubmit({ name, color, description });
+    const message = props.onSubmit({
+      name,
+      color,
+      description,
+      ...(showPattern ? { pattern } : {}),
+      ...(showLineStyle ? { lineStyle } : {}),
+    });
     if (message) setError(message);
   };
 
@@ -87,6 +105,24 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
           aria-label="설명"
         />
       </label>
+
+      <ColorPresets
+        value={color}
+        onPick={(next) => {
+          setColor(next);
+          setError(null);
+        }}
+      />
+
+      {showPattern ? <PatternPicker color={color} value={pattern} onPick={setPattern} /> : null}
+      {showLineStyle ? (
+        <LineStylePicker
+          color={color}
+          value={lineStyle}
+          onPick={setLineStyle}
+          hint={props.role === "kind" ? "칸 테두리" : "배선 경로"}
+        />
+      ) : null}
 
       {error ? <p className="mt-1 text-[11px] text-red-700">{error}</p> : null}
 

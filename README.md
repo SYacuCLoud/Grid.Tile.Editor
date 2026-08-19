@@ -58,11 +58,25 @@
 | 장비 (Kind) | 칸에 이름 글자 + 테두리 | ✅ 추가·수정·삭제 |
 | 배선 (Wire) | 색상 라인 | ✅ 추가·수정·삭제 |
 
-각 항목은 **색 · 디스플레이 이름 · 설명** 세 가지를 가집니다.
+각 항목은 **색 · 디스플레이 이름 · 설명 · 채움 무늬 · 선 모양**을 가집니다.
 
 - **디스플레이 이름** (필수, 24자): 팔레트와 범례에 보이는 이름. **장비는 이 이름이 그대로 도면 칸에 찍히므로** 짧게 두는 편이 읽기 좋습니다(예: `리더`).
 - **설명** (선택, 60자): PNG 범례에 이름과 함께 옅은 글씨로 나옵니다(예: `리더 — 식별 리더기`).
+- **색**: 추천 프리셋 16색 스와치 + 커스텀 컬러 피커.
 - **검증**: 이름 필수, 같은 분류 안에서 중복 이름 금지.
+
+#### 채움 무늬와 선 모양
+
+색만으로는 구분이 어려운 자리가 있습니다 — 흑백 인쇄, 색각 이상, 비슷한 색이 여럿일 때.
+무늬는 색과 별개의 두 번째 표식이라 그런 자리에서도 항목이 구분됩니다.
+
+| | 고를 수 있는 것 | 적용 대상 |
+|---|---|---|
+| **채움 무늬** | 솔리드 · 빗금 · 역빗금 · 교차빗금 · 점 | 배경 · 상태 · 배선 (칸을 채우는 분류) |
+| **선 모양** | 실선 · 점선 · 파선 | 장비 테두리 · 배선 경로 |
+
+무늬는 도면 · 드래그 미리보기 · 팔레트 목록 · 화면 범례 · PNG 범례에서 모두 같은 모양으로 보입니다.
+값을 정하지 않은 항목은 예전과 똑같이 솔리드 · 실선으로 그려지고, 저장 파일에도 남지 않습니다.
 
 > **보존 정책** — 도면에 이미 칠해진 항목을 삭제하면 두 갈래를 묻습니다.
 > `칸은 그대로 두고 목록에서만 삭제`(정의를 남겨 색이 깨지지 않음) 또는 `배치된 N칸까지 함께 삭제`.
@@ -199,6 +213,8 @@ npm run db:generate # (선택) Drizzle 마이그레이션 생성
       "layer": "equipment",         // background | equipment | wiring
       "role": "status",             // tile | status | kind | wire
       "color": "#57a639",           // 채움색(배경·상태·배선) 또는 테두리색(장비)
+      "pattern": "hatch",           // 선택: solid | hatch | hatchReverse | crosshatch | dots (없으면 solid)
+      "lineStyle": "dashed",        // 선택: solid | dotted | dashed (없으면 solid)
       "retired": false              // 목록에서 숨겼지만 정의는 보존된 항목
     },
     {
@@ -268,14 +284,16 @@ Grid.Tile.Editor/
 │     ├─ PalettePanel.tsx          왼쪽 팔레트 · 레이어 토글
 │     ├─ PaletteItemForm.tsx       항목 이름/색/설명 입력 폼
 │     ├─ PaletteDeleteConfirm.tsx  사용 중 항목 삭제 확인 창
-│     ├─ PaletteSwatch.tsx         팔레트 색 견본
+│     ├─ PaletteSwatch.tsx         팔레트 색 · 무늬 견본
+│     ├─ PaletteStyleOptions.tsx   프리셋 색 · 채움 무늬 · 선 모양 선택기
 │     ├─ InspectorPanel.tsx        오른쪽 선택 정보 · 격자 크기 · 범례
 │     ├─ CellNotePopover.tsx       우클릭 칸 정보 편집 상자
 │     ├─ CellNoteBubble.tsx        메모 말풍선
 │     ├─ PaperForm.tsx             인쇄 용지 설정 입력
 │     │
 │     ├─ doc.ts                    PageDoc · ProjectDoc 구조와 편집 로직
-│     ├─ palette.ts                팔레트 타입 · 분류 · 기본 팔레트 · 색 대비
+│     ├─ palette.ts                팔레트 타입 · 분류 · 기본 팔레트 · 프리셋 색 · 색 대비
+│     ├─ pattern.ts                채움 무늬 · 선 모양 정의와 Canvas/CSS 렌더
 │     ├─ paletteOps.ts             항목 추가/수정/삭제 · 검증 · 사용량 · 범례 계산
 │     ├─ range.ts                  범위 정규화 · 클립보드 · 경계 클리핑
 │     ├─ shapes.ts                 직선 · 사각형 · 채우기 셀 계산
@@ -322,7 +340,7 @@ npm run mcp:dev       # 빌드 없이 tsx 로 바로 실행
 | `grid_get_project` | 메타데이터 · 팔레트 · 페이지 목록 (`includeCells` 로 셀 맵까지) |
 | `grid_set_cell` | 한 칸에 팔레트 항목을 칠하고 장비 ID·메모를 붙인다 |
 | `grid_fill_area` | 직사각형 영역을 채우거나(테두리만도 가능) 레이어를 비운다 |
-| `grid_manage_palette` | 상태·장비·배선 항목 추가 / 수정 / 삭제(`keepCells`·`purgeCells`) |
+| `grid_manage_palette` | 상태·장비·배선 항목 추가 / 수정 / 삭제(`keepCells`·`purgeCells`) · 무늬 · 선 모양 |
 | `grid_manage_pages` | 페이지 추가 · 복제 · 삭제 · 이름변경 · 전환 · 크기변경 |
 | `grid_export_preview` | 도면을 ASCII 다이어그램 또는 SVG 로 그려서 반환 |
 

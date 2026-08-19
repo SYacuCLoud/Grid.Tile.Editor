@@ -12,6 +12,14 @@ import {
   roleMeta,
   ROLES,
 } from "./palette";
+import {
+  DEFAULT_LINE_STYLE,
+  DEFAULT_PATTERN,
+  type FillPattern,
+  type LineStyle,
+  sanitizeLineStyle,
+  sanitizePattern,
+} from "./pattern";
 
 export interface PaletteInput {
   /** 디스플레이 이름. */
@@ -19,6 +27,10 @@ export interface PaletteInput {
   color: string;
   /** 설명. 비워 둘 수 있다. */
   description: string;
+  /** 칸 채움 무늬. 없으면 솔리드. */
+  pattern?: FillPattern;
+  /** 선 모양. 없으면 실선. */
+  lineStyle?: LineStyle;
 }
 
 /** 이름·색 검사. 문제가 없으면 null, 있으면 사용자에게 보일 한 줄. */
@@ -78,6 +90,9 @@ export function addPaletteEntry(
   };
   const description = input.description.trim();
   if (description) created.description = description;
+  // 기본값(솔리드 · 실선)은 저장하지 않는다. 예전 문서와 파일 모양이 같아진다.
+  if (input.pattern && input.pattern !== DEFAULT_PATTERN) created.pattern = input.pattern;
+  if (input.lineStyle && input.lineStyle !== DEFAULT_LINE_STYLE) created.lineStyle = input.lineStyle;
 
   return { palette: [...palette, created], created };
 }
@@ -99,6 +114,12 @@ export function updatePaletteEntry(
     const description = input.description.trim();
     if (description) next.description = description;
     else delete next.description;
+
+    if (input.pattern && input.pattern !== DEFAULT_PATTERN) next.pattern = input.pattern;
+    else delete next.pattern;
+    if (input.lineStyle && input.lineStyle !== DEFAULT_LINE_STYLE) next.lineStyle = input.lineStyle;
+    else delete next.lineStyle;
+
     return next;
   });
 }
@@ -286,6 +307,10 @@ export function ensurePalette(raw: unknown): PaletteItem[] {
     if (typeof candidate.description === "string" && candidate.description.trim().length > 0) {
       item.description = candidate.description.trim().slice(0, DESCRIPTION_MAX);
     }
+    const pattern = sanitizePattern(candidate.pattern);
+    if (pattern && pattern !== DEFAULT_PATTERN) item.pattern = pattern;
+    const lineStyle = sanitizeLineStyle(candidate.lineStyle);
+    if (lineStyle && lineStyle !== DEFAULT_LINE_STYLE) item.lineStyle = lineStyle;
     if (candidate.retired === true) item.retired = true;
 
     seen.add(candidate.id);

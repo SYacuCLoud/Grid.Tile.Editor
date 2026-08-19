@@ -1,3 +1,5 @@
+import type { FillPattern, LineStyle } from "./pattern";
+
 export type LayerId = "background" | "equipment" | "wiring";
 
 export interface LayerMeta {
@@ -75,6 +77,15 @@ export interface PaletteItem {
    */
   glyph?: string;
   /**
+   * 칸 채움 무늬. 없으면 솔리드. 색만으로 구분이 어려울 때(흑백 인쇄 · 비슷한 색)
+   * 두 번째 표식이 된다. 채움으로 그려지는 분류(배경 · 상태 · 배선)에 쓴다.
+   */
+  pattern?: FillPattern;
+  /**
+   * 선 모양. 없으면 실선. 장비 테두리와 배선 경로에 쓴다.
+   */
+  lineStyle?: LineStyle;
+  /**
    * 팔레트 목록에서 감춘 항목. 사용 중인 항목을 삭제하면 이미 배치된 칸이
    * 깨지지 않도록 정의만 남긴다.
    */
@@ -113,6 +124,29 @@ export function defaultTiles(): PaletteItem[] {
 }
 
 export const NEW_ITEM_COLOR = "#1f6fb2";
+
+/**
+ * 색 고르기 견본. 색상환을 고르게 도는 12색이라 서로 이웃해 놓아도 구분된다.
+ * 커스텀 색은 그대로 쓸 수 있고, 이 목록은 빠른 선택지일 뿐이다.
+ */
+export const PRESET_COLORS: string[] = [
+  "#e33a2e",
+  "#f2622a",
+  "#f2a03d",
+  "#f2c230",
+  "#8bc34a",
+  "#57a639",
+  "#0f766e",
+  "#22a3c3",
+  "#1f6fb2",
+  "#4f46e5",
+  "#7e22ce",
+  "#be123c",
+  "#4a3f2a",
+  "#64748b",
+  "#9aa3ad",
+  "#101418",
+];
 
 export type PaletteIndex = Map<PaletteId, PaletteItem>;
 

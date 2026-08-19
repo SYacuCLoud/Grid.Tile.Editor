@@ -3,14 +3,18 @@ import { z } from "zod";
 import {
   addPaletteEntry,
   deleteItemInProject,
+  type PaletteInput,
   updatePaletteEntry,
   usageCountInProject,
   validateInput,
 } from "../../app/editor/paletteOps";
+import { FILL_PATTERNS, type FillPattern, LINE_STYLES, type LineStyle } from "../../app/editor/pattern";
 import { pickItem, summarizeProject } from "../helpers";
 import { ToolError, type ToolDef } from "../types";
 
 const EDITABLE_ROLES = ["status", "kind", "wire"] as const;
+const PATTERN_IDS = FILL_PATTERNS.map((item) => item.id) as [string, ...string[]];
+const LINE_STYLE_IDS = LINE_STYLES.map((item) => item.id) as [string, ...string[]];
 
 const ManagePaletteInput = z.object({
   projectId: z.string().describe("프로젝트 ID"),
@@ -27,6 +31,14 @@ const ManagePaletteInput = z.object({
     .optional()
     .describe("색 (#rrggbb)"),
   description: z.string().max(60).optional().describe("설명. PNG 범례에 이름과 함께 나온다"),
+  pattern: z
+    .enum(PATTERN_IDS)
+    .optional()
+    .describe("칸 채움 무늬. 생략하면 솔리드. 장비(kind)는 칸을 채우지 않아 쓰이지 않는다"),
+  lineStyle: z
+    .enum(LINE_STYLE_IDS)
+    .optional()
+    .describe("선 모양. 장비는 칸 테두리, 배선은 경로에 쓴다. 생략하면 실선"),
   deleteMode: z
     .enum(["keepCells", "purgeCells"])
     .default("keepCells")
@@ -46,7 +58,13 @@ export const managePaletteTool: ToolDef = {
     if (args.action === "add") {
       if (!args.role) throw new ToolError("add 에는 role 이 필요합니다.");
       if (!args.name) throw new ToolError("add 에는 name 이 필요합니다.");
-      const input = { name: args.name, color: args.color ?? "#1f6fb2", description: args.description ?? "" };
+      const input: PaletteInput = {
+        name: args.name,
+        color: args.color ?? "#1f6fb2",
+        description: args.description ?? "",
+        ...(args.pattern ? { pattern: args.pattern as FillPattern } : {}),
+        ...(args.lineStyle ? { lineStyle: args.lineStyle as LineStyle } : {}),
+      };
       const problem = validateInput(project.palette, args.role, input);
       if (problem) throw new ToolError(problem);
 
@@ -61,10 +79,13 @@ export const managePaletteTool: ToolDef = {
 
     if (args.action === "update") {
       if (target.role === "tile") throw new ToolError("배경 타일은 고정 항목이라 고칠 수 없습니다.");
-      const input = {
+      // 안 준 값은 그대로 둔다. 이름만 고치려다 무늬가 초기화되면 안 된다.
+      const input: PaletteInput = {
         name: args.name ?? target.name,
         color: args.color ?? target.color ?? "#1f6fb2",
         description: args.description ?? target.description ?? "",
+        pattern: (args.pattern as FillPattern | undefined) ?? target.pattern,
+        lineStyle: (args.lineStyle as LineStyle | undefined) ?? target.lineStyle,
       };
       const problem = validateInput(project.palette, target.role, input, target.id);
       if (problem) throw new ToolError(problem);

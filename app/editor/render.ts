@@ -9,6 +9,7 @@ import {
   type WireId,
 } from "./palette";
 import { legendItems, legendLabel } from "./paletteOps";
+import { dashArray, fillCellPattern } from "./pattern";
 import { type CellRange } from "./range";
 
 export interface RenderOptions {
@@ -80,25 +81,57 @@ function drawWire(
   id: WireId,
   cell: number,
 ) {
-  const color = resolveItem(index, id, "wire").color as string;
+  const item = resolveItem(index, id, "wire");
+  const color = item.color as string;
   const band = Math.max(3, Math.round(cell * 0.34));
   const cx = x * cell + cell / 2;
   const cy = y * cell + cell / 2;
 
+  const neighbours: Array<[number, number]> = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+
+  // 점선 · 파선은 채운 띠로는 표현되지 않는다. 이어지는 방향마다 선을 긋는다.
+  if (item.lineStyle && item.lineStyle !== "solid") {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = band;
+    ctx.setLineDash(dashArray(item.lineStyle, band));
+    ctx.lineCap = "butt";
+
+    let drawn = false;
+    for (const [dx, dy] of neighbours) {
+      if (wiring[cellKey(x + dx, y + dy)] !== id) continue;
+      drawn = true;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + (dx * cell) / 2, cy + (dy * cell) / 2);
+      ctx.stroke();
+    }
+
+    // 홀로 있는 칸은 이을 곳이 없으므로 가운데 점만 찍는다.
+    if (!drawn) {
+      ctx.setLineDash([]);
+      ctx.fillStyle = color;
+      ctx.fillRect(cx - band / 2, cy - band / 2, band, band);
+    }
+
+    ctx.setLineDash([]);
+    ctx.restore();
+    return;
+  }
+
   ctx.fillStyle = color;
   ctx.fillRect(cx - band / 2, cy - band / 2, band, band);
 
-  if (wiring[cellKey(x + 1, y)] === id) {
-    ctx.fillRect(cx, cy - band / 2, cell / 2, band);
-  }
-  if (wiring[cellKey(x - 1, y)] === id) {
-    ctx.fillRect(cx - cell / 2, cy - band / 2, cell / 2, band);
-  }
-  if (wiring[cellKey(x, y + 1)] === id) {
-    ctx.fillRect(cx - band / 2, cy, band, cell / 2);
-  }
-  if (wiring[cellKey(x, y - 1)] === id) {
-    ctx.fillRect(cx - band / 2, cy - cell / 2, band, cell / 2);
+  for (const [dx, dy] of neighbours) {
+    if (wiring[cellKey(x + dx, y + dy)] !== id) continue;
+    const w = dx === 0 ? band : cell / 2;
+    const h = dy === 0 ? band : cell / 2;
+    ctx.fillRect(cx + (dx < 0 ? -cell / 2 : -band / 2), cy + (dy < 0 ? -cell / 2 : -band / 2), w, h);
   }
 }
 
@@ -153,8 +186,7 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
     for (const [key, tile] of Object.entries(doc.background)) {
       const item = resolveItem(index, tile, "tile");
       const [x, y] = key.split(",").map(Number);
-      ctx.fillStyle = item.color as string;
-      ctx.fillRect(x * cell, y * cell, cell, cell);
+      fillCellPattern(ctx, x * cell, y * cell, cell, item.color as string, item.pattern);
       if (item.glyph && cell >= 14) {
         drawCenteredText(
           ctx,
@@ -195,8 +227,7 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
       const status = data.status ? resolveItem(index, data.status, "status") : null;
 
       if (status) {
-        ctx.fillStyle = status.color as string;
-        ctx.fillRect(px, py, cell, cell);
+        fillCellPattern(ctx, px, py, cell, status.color as string, status.pattern);
       }
 
       // 글자는 아래 깔린 채움색 위에서 읽히는 색으로 찍는다.
@@ -209,7 +240,9 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
         if (kind.color) {
           ctx.strokeStyle = kind.color;
           ctx.lineWidth = 2;
+          ctx.setLineDash(dashArray(kind.lineStyle, 2));
           ctx.strokeRect(px + 1, py + 1, cell - 2, cell - 2);
+          ctx.setLineDash([]);
         }
 
         if (cell >= 12) {
@@ -262,13 +295,16 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
         ctx.fillRect(x, y, box, box);
         ctx.strokeStyle = item.color as string;
         ctx.lineWidth = 2;
+        ctx.setLineDash(dashArray(item.lineStyle, 2));
         ctx.strokeRect(x + 1, y + 1, box - 2, box - 2);
+        ctx.setLineDash([]);
       } else {
-        ctx.fillStyle = item.color as string;
-        ctx.fillRect(x, y, box, box);
+        fillCellPattern(ctx, x, y, box, item.color as string, item.pattern);
         ctx.strokeStyle = GRID_LINE_STRONG;
         ctx.lineWidth = 1;
+        ctx.setLineDash(dashArray(item.role === "wire" ? item.lineStyle : undefined, 1));
         ctx.strokeRect(x + 0.5, y + 0.5, box, box);
+        ctx.setLineDash([]);
       }
 
       ctx.fillStyle = LABEL_COLOR;
@@ -313,9 +349,8 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
   if (options.preview && options.preview.points.length > 0) {
     const item = options.preview.item;
     ctx.globalAlpha = 0.55;
-    ctx.fillStyle = item?.color ?? "#111827";
     for (const p of options.preview.points) {
-      ctx.fillRect(p.x * cell + 1, p.y * cell + 1, cell - 2, cell - 2);
+      fillCellPattern(ctx, p.x * cell + 1, p.y * cell + 1, cell - 2, item?.color ?? "#111827", item?.pattern);
     }
     ctx.globalAlpha = 1;
   }
@@ -451,13 +486,17 @@ export function renderSheet(
       ctx.fillRect(x, y, LEGEND_BOX, LEGEND_BOX);
       ctx.strokeStyle = item.color as string;
       ctx.lineWidth = 2;
+      ctx.setLineDash(dashArray(item.lineStyle, 2));
       ctx.strokeRect(x + 1, y + 1, LEGEND_BOX - 2, LEGEND_BOX - 2);
+      ctx.setLineDash([]);
     } else {
-      ctx.fillStyle = item.color as string;
-      ctx.fillRect(x, y, LEGEND_BOX, LEGEND_BOX);
+      // 견본은 도면에서 쓰이는 무늬 그대로 그린다. 배선은 선 모양까지 테두리로 보인다.
+      fillCellPattern(ctx, x, y, LEGEND_BOX, item.color as string, item.pattern);
       ctx.strokeStyle = GRID_LINE_STRONG;
       ctx.lineWidth = 1;
+      ctx.setLineDash(dashArray(item.role === "wire" ? item.lineStyle : undefined, 1));
       ctx.strokeRect(x + 0.5, y + 0.5, LEGEND_BOX, LEGEND_BOX);
+      ctx.setLineDash([]);
     }
 
     const textX = x + LEGEND_BOX + 6;

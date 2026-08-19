@@ -96,6 +96,7 @@ export function PalettePanel(props: PalettePanelProps) {
                 <div className="mb-1">
                   <PaletteItemForm
                     title={`${role.name} 추가`}
+                    role={role.id}
                     initialName=""
                     initialColor={NEW_ITEM_COLOR}
                     initialDescription=""
@@ -116,9 +117,12 @@ export function PalettePanel(props: PalettePanelProps) {
                     {mode?.kind === "edit" && mode.id === item.id ? (
                       <PaletteItemForm
                         title={`${role.name} 편집`}
+                        role={role.id}
                         initialName={item.name}
                         initialColor={item.color ?? NEW_ITEM_COLOR}
                         initialDescription={item.description ?? ""}
+                        initialPattern={item.pattern}
+                        initialLineStyle={item.lineStyle}
                         submitLabel="저장"
                         onSubmit={(input) => {
                           const error = props.onUpdateItem(item.id, input);

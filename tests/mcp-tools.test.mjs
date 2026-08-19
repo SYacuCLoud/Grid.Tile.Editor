@@ -431,3 +431,65 @@ test("store: 없는 프로젝트와 상위 폴더 탈출을 거부한다", () =>
     cleanup();
   }
 });
+
+test("grid_manage_palette: 무늬·선 모양을 넣고 수정 때 유지한다", () => {
+  const { store, cleanup } = freshStore();
+  try {
+    const { projectId } = newProject(store);
+
+    const added = managePaletteTool.handler(
+      { projectId, action: "add", role: "status", name: "빗금 상태", color: "#e33a2e", pattern: "hatch" },
+      store,
+    );
+    assert.equal(added.item.pattern, "hatch");
+
+    // 이름만 고쳐도 무늬가 초기화되면 안 된다.
+    const renamed = managePaletteTool.handler(
+      { projectId, action: "update", paletteId: added.item.id, name: "빗금 상태 2" },
+      store,
+    );
+    assert.equal(renamed.item.pattern, "hatch");
+
+    const wire = managePaletteTool.handler(
+      { projectId, action: "add", role: "wire", name: "점선 배선", color: "#7c3aed", lineStyle: "dotted" },
+      store,
+    );
+    assert.equal(wire.item.lineStyle, "dotted");
+
+    // 조회 결과에도 함께 실린다.
+    const palette = getProjectTool.handler({ projectId }, store).palette;
+    assert.equal(palette.find((item) => item.id === wire.item.id).lineStyle, "dotted");
+  } finally {
+    cleanup();
+  }
+});
+
+test("grid_manage_palette: 모르는 무늬 이름은 거부한다", () => {
+  const { store, cleanup } = freshStore();
+  try {
+    const { projectId } = newProject(store);
+    assert.throws(() =>
+      managePaletteTool.handler(
+        { projectId, action: "add", role: "status", name: "이상", color: "#e33a2e", pattern: "zigzag" },
+        store,
+      ),
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("grid_manage_palette: 무늬를 안 줘도 예전처럼 동작한다 (하위 호환)", () => {
+  const { store, cleanup } = freshStore();
+  try {
+    const { projectId } = newProject(store);
+    const added = managePaletteTool.handler(
+      { projectId, action: "add", role: "status", name: "그냥 상태", color: "#123456" },
+      store,
+    );
+    assert.equal(added.item.pattern, undefined);
+    assert.equal(added.item.lineStyle, undefined);
+  } finally {
+    cleanup();
+  }
+});

@@ -3,72 +3,8 @@ import test from "node:test";
 import { createProject } from "../app/editor/doc.ts";
 import { renderDoc, renderSheet } from "../app/editor/render.ts";
 import { legendItemsForProject } from "../app/editor/paletteOps.ts";
+import { recordingContext, VISIBLE } from "./recording-context.mjs";
 
-/**
- * 그리기 호출을 받아 적는 가짜 캔버스.
- * 브라우저 없이 "무엇을 어떤 색으로 그렸는지" 를 확인하려는 것이다.
- */
-function recordingContext() {
-  const ops = [];
-  const path = [];
-  const state = { fillStyle: "", strokeStyle: "", lineWidth: 0 };
-
-  return {
-    ops,
-    get fillStyle() {
-      return state.fillStyle;
-    },
-    set fillStyle(v) {
-      state.fillStyle = v;
-    },
-    get strokeStyle() {
-      return state.strokeStyle;
-    },
-    set strokeStyle(v) {
-      state.strokeStyle = v;
-    },
-    get lineWidth() {
-      return state.lineWidth;
-    },
-    set lineWidth(v) {
-      state.lineWidth = v;
-    },
-    font: "",
-    textAlign: "",
-    textBaseline: "",
-    globalAlpha: 1,
-    fillRect: (x, y, w, h) => ops.push({ op: "fillRect", color: state.fillStyle, x, y, w, h }),
-    strokeRect: (x, y, w, h) =>
-      ops.push({ op: "strokeRect", color: state.strokeStyle, lineWidth: state.lineWidth, x, y, w, h }),
-    fillText: (text, x, y) => ops.push({ op: "fillText", text, x, y }),
-    measureText: (text) => ({ width: text.length * 6 }),
-    save() {},
-    restore() {},
-    translate() {},
-    setTransform() {},
-    beginPath() {
-      path.length = 0;
-    },
-    moveTo: (x, y) => path.push({ x, y }),
-    lineTo: (x, y) => path.push({ x, y }),
-    stroke() {
-      if (path.length >= 2) {
-        ops.push({
-          op: "stroke",
-          color: state.strokeStyle,
-          lineWidth: state.lineWidth,
-          from: { ...path[0] },
-          to: { ...path[path.length - 1] },
-        });
-      }
-    },
-    fill() {},
-    arc() {},
-    setLineDash() {},
-  };
-}
-
-const VISIBLE = { background: true, equipment: true, wiring: true };
 
 test("PNG 범례: 장비는 테두리, 상태·배선은 채움으로 그린다", () => {
   const project = createProject("범례 렌더");
