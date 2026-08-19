@@ -21,6 +21,7 @@ npm test
 | `tests/render-legend.test.mjs` | PNG 범례 렌더 |
 | `tests/zoom.test.mjs` | 휠 확대 시 커서 고정 계산 |
 | `tests/paper.test.mjs` | 용지 규격 · 장수 계산 |
+| `tests/mcp-tools.test.mjs` | MCP 도구 8종 · 프로젝트 파일 저장소 |
 
 ---
 

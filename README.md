@@ -120,6 +120,7 @@
 | 렌더링 | HTML5 Canvas 2D (격자·배선·PNG 시트 직접 렌더) |
 | 배포 대상 | Cloudflare Workers (`@cloudflare/vite-plugin`, Wrangler) |
 | 저장소 | 브라우저 `localStorage` (선택적으로 Cloudflare D1 + Drizzle ORM) |
+| 에이전트 연동 | `@modelcontextprotocol/sdk` 1.30 + zod 4 (stdio MCP 서버) |
 | 테스트 | `node --test` + `tsx --test` |
 
 > 편집기 자체는 **서버가 필요 없습니다.** Worker / D1 구성은 정적 호스팅과 향후 서버 저장을 위한 발판입니다.
@@ -285,11 +286,62 @@ Grid.Tile.Editor/
 │     ├─ sample.ts                 초기 예시 도면
 │     └─ useEditor.ts              상태 관리 · 페이지 CRUD · Undo/Redo 훅
 │
-├─ tests/                          로직 · 서버 렌더 테스트
+├─ mcp/                            MCP 서버
+│  ├─ server.ts                    stdio 진입점 · 도구 등록
+│  ├─ store.ts                     프로젝트 JSON 파일 저장소
+│  ├─ helpers.ts                   페이지·팔레트 조회와 요약
+│  └─ tools/                       도구 구현 (project · cells · palette · pages · preview)
+│
+├─ tests/                          로직 · 서버 렌더 · MCP 도구 테스트
 ├─ worker/                         Cloudflare Worker 엔트리
 ├─ db/ · drizzle/                  (선택) Drizzle 스키마와 마이그레이션
 ├─ examples/                       D1 연동 예제
-└─ dist/                           빌드 산출물 (커밋하지 않음)
+├─ dist/                           웹 앱 빌드 산출물 (커밋하지 않음)
+└─ dist-mcp/                       MCP 서버 빌드 산출물 (커밋하지 않음)
+```
+
+---
+
+## 🤖 MCP Server
+
+AI 에이전트가 도면을 직접 만들고 고칠 수 있도록 **Model Context Protocol** 서버를 함께 제공합니다.
+서버가 만드는 파일은 편집기의 `JSON 불러오기` 로 그대로 열리는 같은 형식입니다.
+
+```bash
+npm run mcp:build     # dist-mcp/server.js 로 번들
+npm run mcp:start     # 번들 실행 (stdio)
+npm run mcp:dev       # 빌드 없이 tsx 로 바로 실행
+```
+
+### 도구
+
+| 도구 | 하는 일 |
+|---|---|
+| `grid_create_project` | 제목·격자 크기·용지를 정해 새 도면을 만든다 |
+| `grid_list_projects` | 저장 폴더의 프로젝트 목록 |
+| `grid_get_project` | 메타데이터 · 팔레트 · 페이지 목록 (`includeCells` 로 셀 맵까지) |
+| `grid_set_cell` | 한 칸에 팔레트 항목을 칠하고 장비 ID·메모를 붙인다 |
+| `grid_fill_area` | 직사각형 영역을 채우거나(테두리만도 가능) 레이어를 비운다 |
+| `grid_manage_palette` | 상태·장비·배선 항목 추가 / 수정 / 삭제(`keepCells`·`purgeCells`) |
+| `grid_manage_pages` | 페이지 추가 · 복제 · 삭제 · 이름변경 · 전환 · 크기변경 |
+| `grid_export_preview` | 도면을 ASCII 다이어그램 또는 SVG 로 그려서 반환 |
+
+### 저장 위치
+
+프로젝트 하나가 JSON 파일 하나입니다. 기본 폴더는 `./.grid-projects` 이며 `--dir` 인자나
+`GRID_TILE_DATA_DIR` 환경 변수로 바꿉니다.
+
+### 클라이언트 등록 예시
+
+```jsonc
+{
+  "mcpServers": {
+    "grid-tile-editor": {
+      "command": "node",
+      "args": ["C:/_DX/Grid.Tile.Editor/dist-mcp/server.js", "--dir", "C:/_DX/도면"]
+    }
+  }
+}
 ```
 
 ---
@@ -308,7 +360,7 @@ npm test    # 타입 검사 → 빌드 → 서버 렌더 테스트 → 로직 �
 
 1. 이슈로 문제나 제안을 먼저 남겨 주세요.
 2. 작업 전 `npm test`가 통과하는지 확인합니다.
-3. 코드 스타일: 4-space 들여쓰기, 한 줄에 한 선언, 타입/공개 멤버는 PascalCase, 비공개 필드는 `_camelCase`.
+3. 코드 스타일: 2-space 들여쓰기, 한 줄에 한 선언, 타입·컴포넌트는 PascalCase, 함수·변수는 camelCase.
 4. UI 동작을 바꿨다면 [TESTING.md](./TESTING.md)의 해당 시나리오도 함께 갱신해 주세요.
 
 ---

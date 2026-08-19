@@ -43,3 +43,7 @@ tsconfig.tsbuildinfo
 .agents/
 .aionrs/
 .claude/
+
+# mcp
+/dist-mcp/
+/.grid-projects/

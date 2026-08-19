@@ -1,6 +1,6 @@
 {
   "name": "grid-tile-editor",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "license": "MIT",
   "engines": {
     "node": ">=22.13.0"
@@ -10,14 +10,19 @@
     "build": "vinext build",
     "start": "vinext start",
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/range-clipboard.test.mjs tests/multipage.test.mjs tests/render-legend.test.mjs tests/zoom.test.mjs tests/paper.test.mjs",
+    "test": "npm run typecheck && npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/range-clipboard.test.mjs tests/multipage.test.mjs tests/render-legend.test.mjs tests/zoom.test.mjs tests/paper.test.mjs tests/mcp-tools.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "mcp:build": "vite build --config vite.mcp.config.ts",
+    "mcp:start": "node dist-mcp/server.js",
+    "mcp:dev": "tsx mcp/server.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "drizzle-orm": "0.45.2",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
@@ -46,5 +51,8 @@
     "vite": "8.0.13",
     "wrangler": "4.92.0"
   },
-  "type": "module"
+  "type": "module",
+  "bin": {
+    "grid-tile-mcp": "dist-mcp/server.js"
+  }
 }
