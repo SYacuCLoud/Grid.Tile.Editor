@@ -1,4 +1,4 @@
-import { cellKey, type LayoutDoc, type Point } from "./doc";
+import { cellKey, cellPhotos, type LayoutDoc, type Point } from "./doc";
 import {
   indexPalette,
   type LayerId,
@@ -11,6 +11,7 @@ import {
 import { legendItems, legendLabel } from "./paletteOps";
 import { dashArray, fillCellPattern } from "./pattern";
 import { type CellRange } from "./range";
+import { type SheetMeta, watermarkText } from "./watermark";
 
 export interface RenderOptions {
   cell: number;
@@ -41,13 +42,27 @@ const PRINT_GUIDE = "#c026d3";
 /** 용지 범위 안이지만 격자 밖인 자리. 그릴 수 없는 영역임을 알린다. */
 const OUTSIDE_GRID = "#e9edf1";
 
+/** 더 줄이면 읽을 수 없다. 이 아래로는 글자 크기 대신 다른 수를 쓴다. */
+const MIN_FONT_PX = 6;
+/** 글자 둘레 테두리 굵기 비율. 이만큼은 글자 폭 밖으로 번진다. */
+const HALO_RATIO = 0.3;
+/** 가로로 눌러도 읽을 수 있는 한계. 이보다 납작하면 글자가 뭉갠다. */
+const MIN_SCALE_X = 0.55;
+
 function fontFor(px: number): string {
   return `${px}px "Segoe UI", "Malgun Gothic", system-ui, sans-serif`;
 }
 
-function fitText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, basePx: number): number {
-  let size = Math.max(7, Math.round(basePx));
-  while (size > 7) {
+/** 주어진 폭에 들어가는 가장 큰 글자 크기. 못 들어가면 하한선에서 멈춘다. */
+function fitText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  basePx: number,
+  minPx = MIN_FONT_PX,
+): number {
+  let size = Math.max(minPx, Math.round(basePx));
+  while (size > minPx) {
     ctx.font = fontFor(size);
     if (ctx.measureText(text).width <= maxWidth) break;
     size -= 1;
@@ -56,6 +71,116 @@ function fitText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, 
   return size;
 }
 
+/**
+ * 글자 뒤에 깔 테두리 색. 글자와 반대쪽 명도를 쓴다.
+ *
+ * 밝은 상태색이나 빗금 위에서는 검은 글자든 흰 글자든 무늬에 묻힌다. 글자
+ * 둘레를 반대색으로 한 번 두르면 어떤 바탕 위에서도 획이 끊겨 보이지 않는다.
+ */
+function haloColor(textColor: string): string {
+  return textColor === "#ffffff" ? "rgba(16, 20, 24, 0.85)" : "rgba(255, 255, 255, 0.9)";
+}
+
+/** 가운데에서 가른다. 띄어쓰기가 가까이 있으면 거기서 가르는 편이 읽기 좋다. */
+function splitTwoLines(text: string): [string, string] {
+  const middle = Math.ceil(text.length / 2);
+  const space = text.lastIndexOf(" ", middle);
+  const after = text.indexOf(" ", middle);
+  const candidates = [space, after].filter((index) => index > 0 && index < text.length - 1);
+
+  if (candidates.length > 0) {
+    const at = candidates.reduce((best, index) =>
+      Math.abs(index - middle) < Math.abs(best - middle) ? index : best,
+    );
+    return [text.slice(0, at).trim(), text.slice(at + 1).trim()];
+  }
+  return [text.slice(0, middle), text.slice(middle)];
+}
+
+interface TextPlan {
+  lines: string[];
+  size: number;
+  /** 1 이면 그대로, 1 보다 작으면 그만큼 가로로 눌러 넣는다. */
+  scaleX: number;
+}
+
+/**
+ * 칸 안에 글자를 어떻게 넣을지 정한다.
+ *
+ * 한글 네 글자쯤 되면 한 줄로는 칸 폭을 넘긴다. 예전에는 7px 에서 줄이기를
+ * 멈춰 그대로 칸 밖으로 삐져나갔다. 이제는 세 단계로 내려간다.
+ *   1. 글자 크기를 줄여 한 줄에 넣는다.
+ *   2. 세로로 여유가 있으면 두 줄로 나눈다(네 글자 → 두 글자씩).
+ *   3. 그래도 넘치면 가로로 눌러 넣는다.
+ * 어느 단계든 결과는 반드시 주어진 폭 안에 들어간다.
+ */
+function planText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  basePx: number,
+  maxHeight: number,
+): TextPlan {
+  const single = fitText(ctx, text, maxWidth, basePx);
+  const singleFits = ctx.measureText(text).width <= maxWidth;
+
+  // 두 줄로 나눌 세로 여유가 있는가. (줄 간격까지 2.2배로 본다)
+  let two: TextPlan | null = null;
+  const lineRoom = Math.min(basePx, maxHeight / 2.2);
+  if (text.trim().length >= 3 && lineRoom >= MIN_FONT_PX) {
+    const [first, second] = splitTwoLines(text);
+    if (first && second) {
+      const size = Math.min(fitText(ctx, first, maxWidth, lineRoom), fitText(ctx, second, maxWidth, lineRoom));
+      ctx.font = fontFor(size);
+      const widest = Math.max(ctx.measureText(first).width, ctx.measureText(second).width);
+      if (widest <= maxWidth) two = { lines: [first, second], size, scaleX: 1 };
+    }
+  }
+
+  // 한 줄이 들어가고 두 줄보다 작지 않으면 한 줄이 낫다. 두 줄은 글자를 더 크게
+  // 쓸 수 있을 때만 쓴다 — 한 줄로 6px 까지 줄이느니 두 줄로 크게 쓰는 편이 읽힌다.
+  if (singleFits && (!two || single >= two.size)) return { lines: [text], size: single, scaleX: 1 };
+  if (two) return two;
+
+  ctx.font = fontFor(single);
+  const width = ctx.measureText(text).width;
+  const scaleX = Math.max(MIN_SCALE_X, maxWidth / Math.max(1, width));
+
+  // 눌러도 넘칠 만큼 긴 이름은 잘라내고 말줄임을 붙인다. 이웃 칸을 침범하느니
+  // 뒷글자를 접는 편이 낫다. 전체 이름은 팔레트 · 범례에서 볼 수 있다.
+  if (width * scaleX > maxWidth) {
+    return { lines: [ellipsize(ctx, text, maxWidth / scaleX)], size: single, scaleX };
+  }
+  return { lines: [text], size: single, scaleX };
+}
+
+/** 지금 글꼴 기준으로 폭에 들어갈 만큼만 남기고 `…` 을 붙인다. */
+function ellipsize(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  let cut = text.length - 1;
+  while (cut > 1 && ctx.measureText(`${text.slice(0, cut)}…`).width > maxWidth) cut -= 1;
+  return `${text.slice(0, cut)}…`;
+}
+
+function paintLine(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, color: string) {
+  ctx.save();
+  ctx.lineWidth = Math.max(2, size * HALO_RATIO);
+  ctx.lineJoin = "round";
+  ctx.miterLimit = 2;
+  ctx.strokeStyle = haloColor(color);
+  ctx.setLineDash([]);
+  ctx.strokeText(text, x, y);
+  ctx.restore();
+
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+
+/**
+ * 칸 가운데에 글자를 찍는다.
+ *
+ * `maxWidth` 는 글자 테두리(halo)까지 포함한 자리다. 테두리가 굵어 칸 밖으로
+ * 번지면 이웃 칸을 침범하므로 그만큼 미리 뺀다.
+ */
 function drawCenteredText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -64,12 +189,82 @@ function drawCenteredText(
   maxWidth: number,
   basePx: number,
   color: string,
+  maxHeight = basePx,
 ) {
-  fitText(ctx, text, maxWidth, basePx);
-  ctx.fillStyle = color;
+  const halo = Math.max(2, Math.round(basePx) * HALO_RATIO);
+  const room = Math.max(4, maxWidth - halo);
+  const plan = planText(ctx, text, room, basePx, maxHeight);
+
+  ctx.font = fontFor(plan.size);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, cx, cy);
+
+  const lineHeight = plan.size * 1.1;
+  const top = cy - ((plan.lines.length - 1) * lineHeight) / 2;
+
+  if (plan.scaleX === 1) {
+    plan.lines.forEach((line, index) => paintLine(ctx, line, cx, top + index * lineHeight, plan.size, color));
+    return;
+  }
+
+  // 가로로 누를 때는 원점을 글자 자리로 옮기고 눌러서 그린다.
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(plan.scaleX, 1);
+  plan.lines.forEach((line, index) =>
+    paintLine(ctx, line, 0, (index - (plan.lines.length - 1) / 2) * lineHeight, plan.size, color),
+  );
+  ctx.restore();
+}
+
+/** 이웃으로 뻗는 네 방향. 이어진 방향으로만 띠를 늘인다. */
+const WIRE_DIRECTIONS: Array<[number, number]> = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
+interface WireGeometry {
+  color: string;
+  band: number;
+  cx: number;
+  cy: number;
+  links: Array<[number, number]>;
+  /** 가운데 네모와 이어지는 방향의 띠. 무늬를 넣을 때 이 모양으로 잘라 쓴다. */
+  rects: Array<[number, number, number, number]>;
+}
+
+function wireGeometry(
+  wiring: Record<string, WireId>,
+  x: number,
+  y: number,
+  id: WireId,
+  cell: number,
+  color: string,
+): WireGeometry {
+  const band = Math.max(3, Math.round(cell * 0.34));
+  const cx = x * cell + cell / 2;
+  const cy = y * cell + cell / 2;
+  const links = WIRE_DIRECTIONS.filter(([dx, dy]) => wiring[cellKey(x + dx, y + dy)] === id);
+
+  const rects: Array<[number, number, number, number]> = [[cx - band / 2, cy - band / 2, band, band]];
+  for (const [dx, dy] of links) {
+    rects.push([
+      cx + (dx < 0 ? -cell / 2 : -band / 2),
+      cy + (dy < 0 ? -cell / 2 : -band / 2),
+      dx === 0 ? band : cell / 2,
+      dy === 0 ? band : cell / 2,
+    ]);
+  }
+
+  return { color, band, cx, cy, links, rects };
+}
+
+/** 이 칸이 직선으로 지나가기만 하는가. 모퉁이 · 갈림 · 끝은 아니다. */
+function isStraightThrough(links: Array<[number, number]>): boolean {
+  if (links.length !== 2) return false;
+  return links[0][0] === -links[1][0] && links[0][1] === -links[1][1];
 }
 
 function drawWire(
@@ -82,57 +277,107 @@ function drawWire(
   cell: number,
 ) {
   const item = resolveItem(index, id, "wire");
-  const color = item.color as string;
-  const band = Math.max(3, Math.round(cell * 0.34));
-  const cx = x * cell + cell / 2;
-  const cy = y * cell + cell / 2;
+  const geometry = wireGeometry(wiring, x, y, id, cell, item.color as string);
+  const { color, band, cx, cy, links, rects } = geometry;
+  const style = item.lineStyle ?? "solid";
 
-  const neighbours: Array<[number, number]> = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-  ];
-
-  // 점선 · 파선은 채운 띠로는 표현되지 않는다. 이어지는 방향마다 선을 긋는다.
-  if (item.lineStyle && item.lineStyle !== "solid") {
+  if (style !== "solid") {
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = band;
-    ctx.setLineDash(dashArray(item.lineStyle, band));
     ctx.lineCap = "butt";
+    ctx.setLineDash(dashArray(style, band));
 
-    let drawn = false;
-    for (const [dx, dy] of neighbours) {
-      if (wiring[cellKey(x + dx, y + dy)] !== id) continue;
-      drawn = true;
+    for (const [dx, dy] of links) {
+      // 언제나 오른쪽·아래 방향으로 긋고 dash 위상을 절대 좌표에 맞춘다.
+      // 칸마다 위상을 0 에서 다시 시작하면 이웃 칸과 점선이 어긋나 끊겨 보인다.
+      const horizontal = dy === 0;
+      const from = horizontal ? Math.min(cx, cx + (dx * cell) / 2) : Math.min(cy, cy + (dy * cell) / 2);
+      const to = horizontal ? Math.max(cx, cx + (dx * cell) / 2) : Math.max(cy, cy + (dy * cell) / 2);
+
+      ctx.lineDashOffset = from;
       ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(cx + (dx * cell) / 2, cy + (dy * cell) / 2);
+      if (horizontal) {
+        ctx.moveTo(from, cy);
+        ctx.lineTo(to, cy);
+      } else {
+        ctx.moveTo(cx, from);
+        ctx.lineTo(cx, to);
+      }
       ctx.stroke();
     }
 
-    // 홀로 있는 칸은 이을 곳이 없으므로 가운데 점만 찍는다.
-    if (!drawn) {
+    // 모퉁이 · 갈림 · 끝에는 매듭을 채운다. 곧게 지나가는 칸은 점선 그대로 둔다.
+    if (!isStraightThrough(links)) {
       ctx.setLineDash([]);
       ctx.fillStyle = color;
       ctx.fillRect(cx - band / 2, cy - band / 2, band, band);
     }
 
     ctx.setLineDash([]);
+    ctx.lineDashOffset = 0;
     ctx.restore();
     return;
   }
 
+  // 배선은 경로다. 칸을 채우는 무늬는 쓰지 않는다(저장 파일에 남아 있어도 무시한다).
   ctx.fillStyle = color;
-  ctx.fillRect(cx - band / 2, cy - band / 2, band, band);
+  for (const [rx, ry, rw, rh] of rects) ctx.fillRect(rx, ry, rw, rh);
+}
 
-  for (const [dx, dy] of neighbours) {
-    if (wiring[cellKey(x + dx, y + dy)] !== id) continue;
-    const w = dx === 0 ? band : cell / 2;
-    const h = dy === 0 ? band : cell / 2;
-    ctx.fillRect(cx + (dx < 0 ? -cell / 2 : -band / 2), cy + (dy < 0 ? -cell / 2 : -band / 2), w, h);
+/**
+ * 범례 · 미리보기 견본 한 칸.
+ *
+ * 도면에서 쓰이는 방식을 그대로 보여 준다 — 장비는 칸 테두리, 배선은 가로지르는
+ * 경로, 나머지는 칸 채움. 목록과 도면이 다르게 보이면 같은 색이 무엇을 뜻하는지
+ * 읽을 수 없다.
+ */
+function drawLegendSwatch(
+  ctx: CanvasRenderingContext2D,
+  item: PaletteItem,
+  x: number,
+  y: number,
+  box: number,
+) {
+  const color = item.color as string;
+
+  if (item.role === "kind") {
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(x, y, box, box);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(dashArray(item.lineStyle, 2));
+    ctx.strokeRect(x + 1, y + 1, box - 2, box - 2);
+    ctx.setLineDash([]);
+    return;
   }
+
+  if (item.role === "wire") {
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(x, y, box, box);
+    ctx.strokeStyle = GRID_LINE_STRONG;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, box, box);
+
+    // 배선은 칸을 채우지 않고 지나간다. 견본도 가로지르는 선으로 보인다.
+    const band = Math.max(2, box * 0.34);
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = band;
+    ctx.setLineDash(dashArray(item.lineStyle, band));
+    ctx.beginPath();
+    ctx.moveTo(x, y + box / 2);
+    ctx.lineTo(x + box, y + box / 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+    return;
+  }
+
+  fillCellPattern(ctx, x, y, box, color, item.pattern);
+  ctx.strokeStyle = GRID_LINE_STRONG;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, box, box);
 }
 
 export function docPixelSize(doc: LayoutDoc, cell: number): { width: number; height: number } {
@@ -248,13 +493,16 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
         if (cell >= 12) {
           const cy = data.label ? py + cell * 0.68 : py + cell / 2;
           // 장비는 디스플레이 이름이 곧 칸에 찍히는 글자다.
-          drawCenteredText(ctx, kind.name, px + cell / 2, cy, cell - 5, cell * 0.36, textColor);
+          // 장비 ID 가 함께 있으면 칸을 반으로 나눠 쓰므로 두 줄로 늘릴 자리가 없다.
+          const room = data.label ? cell * 0.4 : cell * 0.8;
+          drawCenteredText(ctx, kind.name, px + cell / 2, cy, cell - 5, cell * 0.36, textColor, room);
         }
       }
 
       if (data.label && cell >= 12) {
         const cy = data.kind ? py + cell * 0.28 : py + cell / 2;
-        drawCenteredText(ctx, data.label, px + cell / 2, cy, cell - 5, cell * 0.34, textColor);
+        const room = data.kind ? cell * 0.4 : cell * 0.8;
+        drawCenteredText(ctx, data.label, px + cell / 2, cy, cell - 5, cell * 0.34, textColor, room);
       }
 
       if (data.memo) {
@@ -262,6 +510,30 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
         ctx.beginPath();
         ctx.arc(px + cell - 4, py + 4, 2, 0, Math.PI * 2);
         ctx.fill();
+      }
+
+      // 사진이 붙은 칸은 왼쪽 아래에 작은 네모 표시를 둔다. 메모 점(오른쪽 위)과
+      // 자리를 달리해 둘이 함께 있어도 구분된다.
+      // 두 장 이상이면 네모 오른쪽에 장수를 적는다 — 열어 보지 않아도 몇 장인지 안다.
+      const photos = cellPhotos(data);
+      if (photos.length > 0) {
+        const size = Math.max(4, Math.round(cell * 0.18));
+        const top = py + cell - size - 2;
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(px + 2, top, size, size);
+        ctx.strokeStyle = "#111827";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+        ctx.strokeRect(px + 2.5, top + 0.5, size - 1, size - 1);
+
+        if (photos.length > 1 && cell >= 18) {
+          const fontSize = Math.max(7, Math.round(cell * 0.24));
+          ctx.font = `${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.textAlign = "left";
+          ctx.textBaseline = "bottom";
+          ctx.fillStyle = "#111827";
+          ctx.fillText(`${photos.length}`, px + size + 4, py + cell - 2);
+        }
       }
     }
   }
@@ -290,22 +562,7 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
       const x = (i % columns) * colWidth + 4;
       const y = bandTop + Math.floor(i / columns) * rowHeight + (rowHeight - box) / 2;
 
-      if (item.role === "kind") {
-        ctx.fillStyle = PAPER;
-        ctx.fillRect(x, y, box, box);
-        ctx.strokeStyle = item.color as string;
-        ctx.lineWidth = 2;
-        ctx.setLineDash(dashArray(item.lineStyle, 2));
-        ctx.strokeRect(x + 1, y + 1, box - 2, box - 2);
-        ctx.setLineDash([]);
-      } else {
-        fillCellPattern(ctx, x, y, box, item.color as string, item.pattern);
-        ctx.strokeStyle = GRID_LINE_STRONG;
-        ctx.lineWidth = 1;
-        ctx.setLineDash(dashArray(item.role === "wire" ? item.lineStyle : undefined, 1));
-        ctx.strokeRect(x + 0.5, y + 0.5, box, box);
-        ctx.setLineDash([]);
-      }
+      drawLegendSwatch(ctx, item, x, y, box);
 
       ctx.fillStyle = LABEL_COLOR;
       ctx.textAlign = "left";
@@ -450,6 +707,7 @@ export function renderSheet(
   cell: number,
   visible: Record<LayerId, boolean>,
   legendList?: PaletteItem[],
+  meta?: SheetMeta,
 ) {
   const items = legendList ?? legendItems(doc);
   const grid = docPixelSize(doc, cell);
@@ -479,25 +737,7 @@ export function renderSheet(
     const x = SHEET_PADDING + (i % legend.cols) * legend.colWidth;
     const y = top + Math.floor(i / legend.cols) * LEGEND_ROW_HEIGHT;
 
-    // 견본은 도면에서 쓰이는 방식을 그대로 보여 준다.
-    // 장비 색은 칸 테두리로 그려지므로 범례도 테두리로 그린다. 채우면 상태색과 구분되지 않는다.
-    if (item.role === "kind") {
-      ctx.fillStyle = PAPER;
-      ctx.fillRect(x, y, LEGEND_BOX, LEGEND_BOX);
-      ctx.strokeStyle = item.color as string;
-      ctx.lineWidth = 2;
-      ctx.setLineDash(dashArray(item.lineStyle, 2));
-      ctx.strokeRect(x + 1, y + 1, LEGEND_BOX - 2, LEGEND_BOX - 2);
-      ctx.setLineDash([]);
-    } else {
-      // 견본은 도면에서 쓰이는 무늬 그대로 그린다. 배선은 선 모양까지 테두리로 보인다.
-      fillCellPattern(ctx, x, y, LEGEND_BOX, item.color as string, item.pattern);
-      ctx.strokeStyle = GRID_LINE_STRONG;
-      ctx.lineWidth = 1;
-      ctx.setLineDash(dashArray(item.role === "wire" ? item.lineStyle : undefined, 1));
-      ctx.strokeRect(x + 0.5, y + 0.5, LEGEND_BOX, LEGEND_BOX);
-      ctx.setLineDash([]);
-    }
+    drawLegendSwatch(ctx, item, x, y, LEGEND_BOX);
 
     const textX = x + LEGEND_BOX + 6;
     const textY = y + LEGEND_BOX / 2;
@@ -523,6 +763,21 @@ export function renderSheet(
       }
     }
   });
+
+  // 출처 한 줄 — 어느 판을 언제 누가 뽑았는지. 아래 여백에 옅게 적는다.
+  const footer = watermarkText({
+    title: meta?.title ?? doc.title ?? "격자형 배치도",
+    revision: meta?.revision ?? null,
+    printedAt: meta?.printedAt ?? null,
+    author: meta?.author ?? null,
+  });
+  if (footer) {
+    ctx.font = fontFor(11);
+    ctx.fillStyle = LEGEND_DESC_COLOR;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(footer, SHEET_PADDING, size.height - SHEET_PADDING * 0.4);
+  }
 }
 
 export function sheetPixelSize(

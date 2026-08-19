@@ -1,4 +1,5 @@
 import { fillAreaTool, setCellTool } from "./cells";
+import { checkpointTool, diffTool, historyTool, restoreTool } from "./history";
 import { managePagesTool } from "./pages";
 import { managePaletteTool } from "./palette";
 import { exportPreviewTool } from "./preview";
@@ -15,6 +16,10 @@ export const TOOLS: ToolDef[] = [
   managePaletteTool,
   managePagesTool,
   exportPreviewTool,
+  historyTool,
+  checkpointTool,
+  restoreTool,
+  diffTool,
 ];
 
 export function findTool(name: string): ToolDef | undefined {
@@ -23,6 +28,10 @@ export function findTool(name: string): ToolDef | undefined {
 
 export {
   createProjectTool,
+  historyTool,
+  checkpointTool,
+  restoreTool,
+  diffTool,
   listProjectsTool,
   getProjectTool,
   setCellTool,

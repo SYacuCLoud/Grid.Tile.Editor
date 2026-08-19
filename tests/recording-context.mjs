@@ -9,7 +9,17 @@ export function recordingContext() {
   const ops = [];
   const path = [];
   const stack = [];
-  const state = { fillStyle: "", strokeStyle: "", lineWidth: 0, lineDash: [], globalAlpha: 1, lineCap: "butt" };
+  const state = {
+    fillStyle: "",
+    strokeStyle: "",
+    lineWidth: 0,
+    lineDash: [],
+    lineDashOffset: 0,
+    globalAlpha: 1,
+    lineCap: "butt",
+    lineJoin: "miter",
+    miterLimit: 10,
+  };
 
   return {
     ops,
@@ -43,6 +53,24 @@ export function recordingContext() {
     set lineCap(v) {
       state.lineCap = v;
     },
+    get lineJoin() {
+      return state.lineJoin;
+    },
+    set lineJoin(v) {
+      state.lineJoin = v;
+    },
+    get miterLimit() {
+      return state.miterLimit;
+    },
+    set miterLimit(v) {
+      state.miterLimit = v;
+    },
+    get lineDashOffset() {
+      return state.lineDashOffset;
+    },
+    set lineDashOffset(v) {
+      state.lineDashOffset = v;
+    },
     font: "",
     textAlign: "",
     textBaseline: "",
@@ -60,7 +88,14 @@ export function recordingContext() {
         h,
       }),
     fillText: (text, x, y) => ops.push({ op: "fillText", text, x, y }),
-    measureText: (text) => ({ width: text.length * 6 }),
+    strokeText: (text, x, y) =>
+      ops.push({ op: "strokeText", text, x, y, color: state.strokeStyle, lineWidth: state.lineWidth }),
+    // 글자 폭은 글꼴 크기에 비례한다고 본다. 실제 글꼴은 아니지만, 크기를 줄이면
+    // 좁아진다는 성질이 같아야 렌더러의 "줄여서 넣기" 를 시험할 수 있다.
+    measureText(text) {
+      const size = Number.parseInt(this.font, 10) || 12;
+      return { width: text.length * size * 0.55 };
+    },
     save() {
       stack.push({ ...state, lineDash: [...state.lineDash] });
     },
@@ -69,6 +104,7 @@ export function recordingContext() {
       if (previous) Object.assign(state, previous);
     },
     translate() {},
+    scale() {},
     setTransform() {},
     beginPath() {
       path.length = 0;
@@ -85,6 +121,7 @@ export function recordingContext() {
           color: state.strokeStyle,
           lineWidth: state.lineWidth,
           dash: [...state.lineDash],
+          dashOffset: state.lineDashOffset,
           from: { ...path[0] },
           to: { ...path[path.length - 1] },
         });

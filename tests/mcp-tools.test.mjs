@@ -451,10 +451,20 @@ test("grid_manage_palette: 무늬·선 모양을 넣고 수정 때 유지한다"
     assert.equal(renamed.item.pattern, "hatch");
 
     const wire = managePaletteTool.handler(
-      { projectId, action: "add", role: "wire", name: "점선 배선", color: "#7c3aed", lineStyle: "dotted" },
+      {
+        projectId,
+        action: "add",
+        role: "wire",
+        name: "점선 배선",
+        color: "#7c3aed",
+        lineStyle: "dotted",
+        pattern: "hatch",
+      },
       store,
     );
     assert.equal(wire.item.lineStyle, "dotted");
+    // 배선은 칸을 채우지 않으므로 무늬는 받지 않는다.
+    assert.equal(wire.item.pattern, undefined);
 
     // 조회 결과에도 함께 실린다.
     const palette = getProjectTool.handler({ projectId }, store).palette;
@@ -489,6 +499,69 @@ test("grid_manage_palette: 무늬를 안 줘도 예전처럼 동작한다 (하�
     );
     assert.equal(added.item.pattern, undefined);
     assert.equal(added.item.lineStyle, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+test("grid_manage_pages: 용지 설정을 넣고 고치고 지운다", () => {
+  const { store, cleanup } = freshStore();
+  try {
+    const { projectId } = newProject(store);
+    const pages = getProjectTool.handler({ projectId }, store).pages;
+    assert.equal(pages[0].paper, null);
+
+    const set = managePagesTool.handler(
+      { projectId, action: "paper", pageId: pages[0].id, paperSize: "a3", orientation: "portrait", cellMm: 8 },
+      store,
+    );
+    assert.deepEqual(set.pages[0].paper, { id: "a3", orientation: "portrait", cellMm: 8, marginMm: 10 });
+
+    // 준 값만 바꾸고 나머지는 그대로 둔다.
+    const tweak = managePagesTool.handler(
+      { projectId, action: "paper", pageId: pages[0].id, marginMm: 5 },
+      store,
+    );
+    assert.deepEqual(tweak.pages[0].paper, { id: "a3", orientation: "portrait", cellMm: 8, marginMm: 5 });
+
+    const cleared = managePagesTool.handler(
+      { projectId, action: "paper", pageId: pages[0].id, paperSize: null },
+      store,
+    );
+    assert.equal(cleared.pages[0].paper, null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("용지 설정은 저장·재읽기·복제·크기변경을 거쳐도 남는다", () => {
+  const { store, cleanup } = freshStore();
+  try {
+    const { projectId } = createProjectTool.handler(
+      { title: "용지 보존", width: 20, height: 12, paperSize: "a3", orientation: "portrait", cellMm: 7, marginMm: 8 },
+      store,
+    );
+    const paper = { id: "a3", orientation: "portrait", cellMm: 7, marginMm: 8 };
+
+    // 파일에 그대로 적힌다.
+    const saved = JSON.parse(readFileSync(store.path(projectId), "utf8"));
+    assert.deepEqual(saved.pages[0].paper, paper);
+
+    // 다시 읽어도 그대로다.
+    assert.deepEqual(getProjectTool.handler({ projectId }, store).pages[0].paper, paper);
+
+    // 칸을 칠하거나 크기를 바꿔도 유지된다.
+    setCellTool.handler({ projectId, x: 1, y: 1, paletteId: "wall" }, store);
+    const pages = getProjectTool.handler({ projectId }, store).pages;
+    const resized = managePagesTool.handler(
+      { projectId, action: "resize", pageId: pages[0].id, width: 40, height: 30 },
+      store,
+    );
+    assert.deepEqual(resized.pages[0].paper, paper);
+
+    // 복제한 페이지도 같은 용지 설정을 갖는다.
+    const duplicated = managePagesTool.handler({ projectId, action: "duplicate", pageId: pages[0].id }, store);
+    assert.deepEqual(duplicated.pages[1].paper, paper);
   } finally {
     cleanup();
   }

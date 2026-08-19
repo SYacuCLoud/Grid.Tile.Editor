@@ -1,9 +1,10 @@
 import { z } from "zod";
 
 import { MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, createProject } from "../../app/editor/doc";
+import { createRevisionStore } from "../../server/revisions";
 import { defaultPaper } from "../../app/editor/paper";
 import { pickPage, summarizeProject } from "../helpers";
-import type { ToolDef } from "../types";
+import { ToolError, type ToolDef } from "../types";
 
 const PAPER_IDS = ["a4", "a3", "a2", "letter"] as const;
 
@@ -63,9 +64,19 @@ export const createProjectTool: ToolDef = {
     }
 
     const projectId = args.projectId?.trim() || store.allocateId(args.title);
-    const path = store.write(projectId, project);
 
-    return { projectId, path, project: summarizeProject(project) };
+    // 만들 때 첫 리비전(r1)을 함께 남긴다. 되돌릴 기준점이 없으면 grid_diff ·
+    // grid_restore 가 쓸 자리가 없다.
+    const revisions = createRevisionStore(store.dir);
+    const saved = revisions.save({ id: projectId, project, mode: "overwrite", author: "MCP" });
+    if (!saved.ok) throw new ToolError("도면을 만들지 못했습니다.");
+
+    return {
+      projectId,
+      path: store.path(projectId),
+      revision: saved.revision,
+      project: summarizeProject(project),
+    };
   },
 };
 

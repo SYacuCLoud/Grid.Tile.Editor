@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { CellNoteBubble } from "./CellNoteBubble";
-import { cellKey, type LayoutDoc, type Point } from "./doc";
+import { cellKey, cellPhotos, type LayoutDoc, type Point } from "./doc";
 import { type LayerId, type PaletteItem } from "./palette";
 import { type CellRange } from "./range";
 import { canvasCells, renderDoc } from "./render";
@@ -108,8 +108,10 @@ export function GridCanvas(props: GridCanvasProps) {
     [cell],
   );
 
-  // 마우스를 올린 칸에 메모가 있으면 말풍선으로 보여 준다.
-  const hoverMemo = hover ? doc.equipment[cellKey(hover.x, hover.y)]?.memo : undefined;
+  // 마우스를 올린 칸에 메모나 사진이 있으면 말풍선으로 보여 준다.
+  const hoverCell = hover ? doc.equipment[cellKey(hover.x, hover.y)] : undefined;
+  const hoverMemo = hoverCell?.memo;
+  const hoverPhotos = cellPhotos(hoverCell);
 
   return (
     <div className="relative inline-block">
@@ -139,9 +141,10 @@ export function GridCanvas(props: GridCanvasProps) {
         }}
       />
 
-      {hover && hoverMemo && !props.noteOpen ? (
+      {hover && (hoverMemo || hoverPhotos.length > 0) && !props.noteOpen ? (
         <CellNoteBubble
-          text={hoverMemo}
+          text={hoverMemo ?? ""}
+          photos={hoverPhotos}
           x={hover.x}
           y={hover.y}
           cell={cell}

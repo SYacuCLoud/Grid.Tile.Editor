@@ -1,6 +1,8 @@
 import { sites } from "@openai/sites-vite-plugin";
 import vinext from "vinext";
 import { defineConfig } from "vite";
+
+import { gridProjectsApi } from "./server/vitePlugin";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -59,6 +61,8 @@ export default defineConfig(async () => {
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
     plugins: [
+      // 로컬 폴더(.grid-projects) 기반 도면 공유 · 버전 이력 API.
+      gridProjectsApi(),
       vinext(),
       sites(),
       cloudflare({

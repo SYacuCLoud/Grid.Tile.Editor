@@ -89,6 +89,8 @@ export interface EditorState {
   activeLayer: LayerId;
   visible: Record<LayerId, boolean>;
   showGrid: boolean;
+  /** 칸 번호 눈금자를 도면 위·왼쪽에 붙일지. */
+  showRuler: boolean;
   cell: number;
   selectedKey: string | null;
   /** 메모 편집 상자를 열어 둔 칸. 없으면 null. */
@@ -134,6 +136,7 @@ export function useEditor() {
     wiring: true,
   });
   const [showGrid, setShowGrid] = useState(true);
+  const [showRuler, setShowRuler] = useState(true);
   const [cell, setCell] = useState(22);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [noteKey, setNoteKey] = useState<string | null>(null);
@@ -395,12 +398,16 @@ export function useEditor() {
 
   const closeNote = useCallback(() => setNoteKey(null), []);
 
-  /** 장비 ID 와 메모를 함께 바꾼다. 같은 칸의 상태·장비는 건드리지 않는다. */
+  /** 장비 ID · 메모 · 사진을 함께 바꾼다. 같은 칸의 상태·장비는 건드리지 않는다. */
   const saveNote = useCallback(
-    (key: string, value: { label: string; memo: string }) => {
+    (key: string, value: { label: string; memo: string; photos?: string[] }) => {
       applyEdit((current) =>
         updateActivePage(current, (page) =>
-          updateEquipmentInfoOnPage(page, key, { label: value.label.trim(), memo: value.memo }),
+          updateEquipmentInfoOnPage(page, key, {
+            label: value.label.trim(),
+            memo: value.memo,
+            photos: value.photos ?? [],
+          }),
         ),
       );
       setNoteKey(null);
@@ -624,6 +631,7 @@ export function useEditor() {
       activeLayer,
       visible,
       showGrid,
+      showRuler,
       cell,
       selectedKey,
       noteKey,
@@ -653,6 +661,7 @@ export function useEditor() {
       selectedKey,
       selectionRange,
       showGrid,
+      showRuler,
       tool,
       visible,
     ],
@@ -670,6 +679,7 @@ export function useEditor() {
       setActiveLayer,
       toggleLayer,
       setShowGrid,
+      setShowRuler,
       zoomBy,
       undo,
       redo,

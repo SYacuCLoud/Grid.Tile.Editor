@@ -34,7 +34,7 @@ const ManagePaletteInput = z.object({
   pattern: z
     .enum(PATTERN_IDS)
     .optional()
-    .describe("칸 채움 무늬. 생략하면 솔리드. 장비(kind)는 칸을 채우지 않아 쓰이지 않는다"),
+    .describe("칸 채움 무늬. 생략하면 솔리드. 배경·상태에만 쓴다(장비는 테두리, 배선은 경로라 무시된다)"),
   lineStyle: z
     .enum(LINE_STYLE_IDS)
     .optional()

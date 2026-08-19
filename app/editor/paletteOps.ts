@@ -34,6 +34,11 @@ export interface PaletteInput {
 }
 
 /** 이름·색 검사. 문제가 없으면 null, 있으면 사용자에게 보일 한 줄. */
+/** 칸을 통째로 채우는 분류인가. 장비는 테두리, 배선은 경로로 보이므로 무늬를 쓰지 않는다. */
+export function usesPattern(role: PaletteRole): boolean {
+  return role !== "kind" && role !== "wire";
+}
+
 export function validateInput(
   palette: PaletteItem[],
   role: PaletteRole,
@@ -91,7 +96,8 @@ export function addPaletteEntry(
   const description = input.description.trim();
   if (description) created.description = description;
   // 기본값(솔리드 · 실선)은 저장하지 않는다. 예전 문서와 파일 모양이 같아진다.
-  if (input.pattern && input.pattern !== DEFAULT_PATTERN) created.pattern = input.pattern;
+  // 배선은 칸을 채우지 않으므로 무늬를 받지 않는다.
+  if (usesPattern(role) && input.pattern && input.pattern !== DEFAULT_PATTERN) created.pattern = input.pattern;
   if (input.lineStyle && input.lineStyle !== DEFAULT_LINE_STYLE) created.lineStyle = input.lineStyle;
 
   return { palette: [...palette, created], created };
@@ -115,7 +121,7 @@ export function updatePaletteEntry(
     if (description) next.description = description;
     else delete next.description;
 
-    if (input.pattern && input.pattern !== DEFAULT_PATTERN) next.pattern = input.pattern;
+    if (usesPattern(item.role) && input.pattern && input.pattern !== DEFAULT_PATTERN) next.pattern = input.pattern;
     else delete next.pattern;
     if (input.lineStyle && input.lineStyle !== DEFAULT_LINE_STYLE) next.lineStyle = input.lineStyle;
     else delete next.lineStyle;
@@ -308,7 +314,8 @@ export function ensurePalette(raw: unknown): PaletteItem[] {
       item.description = candidate.description.trim().slice(0, DESCRIPTION_MAX);
     }
     const pattern = sanitizePattern(candidate.pattern);
-    if (pattern && pattern !== DEFAULT_PATTERN) item.pattern = pattern;
+    // 예전 파일에 배선 무늬가 남아 있어도 버린다. 배선은 선 모양만 쓴다.
+    if (usesPattern(candidate.role) && pattern && pattern !== DEFAULT_PATTERN) item.pattern = pattern;
     const lineStyle = sanitizeLineStyle(candidate.lineStyle);
     if (lineStyle && lineStyle !== DEFAULT_LINE_STYLE) item.lineStyle = lineStyle;
     if (candidate.retired === true) item.retired = true;
@@ -336,14 +343,22 @@ export function withUserItems(base: PaletteItem[], current: PaletteItem[]): Pale
 
 const LEGEND_ORDER: PaletteRole[] = ["status", "kind", "tile", "wire"];
 
+/**
+ * 범례는 **실제로 칠해진 항목만** 담는다.
+ *
+ * 팔레트에는 있지만 이 도면에서 한 칸도 쓰지 않은 항목까지 넣으면 범례 띠가
+ * 쓸데없이 길어지고, 인쇄할 때 그만큼 도면 자리를 잡아먹는다. 읽는 사람에게도
+ * 쓰지 않은 색을 설명할 이유가 없다.
+ *
+ * 팔레트에서 지웠지만 칸에는 남아 있는 항목(retired)은 그 칸이 있는 한 남는다.
+ */
 function buildLegend(palette: PaletteItem[], sources: CellSource[]): PaletteItem[] {
   const out: PaletteItem[] = [];
 
   for (const role of LEGEND_ORDER) {
     for (const item of palette) {
       if (item.role !== role || !item.color) continue;
-      // 감춘 항목은 어딘가에서 아직 쓰이는 동안만 범례에 남긴다.
-      if (item.retired && usageCountIn(sources, item) === 0) continue;
+      if (usageCountIn(sources, item) === 0) continue;
       out.push(item);
     }
   }
@@ -351,14 +366,19 @@ function buildLegend(palette: PaletteItem[], sources: CellSource[]): PaletteItem
   return out;
 }
 
-/** 범례에 넣을 항목 — 색을 가진 항목. 삭제 후 칸에만 남은 항목도 함께 보인다. */
+/** 이 문서(활성 페이지)에서 쓰인 항목만. */
 export function legendItems(doc: LayoutDoc): PaletteItem[] {
   return buildLegend(doc.palette, [doc]);
 }
 
+/** 이 페이지에서 쓰인 항목만. 페이지마다 범례가 달라진다. */
+export function legendItemsForPage(palette: PaletteItem[], page: PageDoc): PaletteItem[] {
+  return buildLegend(palette, [page]);
+}
+
 /**
- * 프로젝트 기준 범례. 감춘 항목이 다른 페이지에서 쓰이고 있으면 함께 남긴다.
- * 활성 페이지만 보면 그 항목의 색 설명이 범례·PNG 에서 사라진다.
+ * 프로젝트 전체에서 한 번이라도 쓰인 항목.
+ * 페이지를 가리지 않는 목록이 필요할 때만 쓴다(범례 기본값은 페이지 기준이다).
  */
 export function legendItemsForProject(project: ProjectDoc): PaletteItem[] {
   return buildLegend(project.palette, project.pages);

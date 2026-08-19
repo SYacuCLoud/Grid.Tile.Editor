@@ -21,6 +21,24 @@ export interface EquipmentCell {
   /** 장비 ID. 예: C1101 */
   label?: string;
   memo?: string;
+  /**
+   * 칸에 걸어 둔 사진들(data URL). 현장 사진을 그 자리에 붙여 두면 도면이 대장이 된다.
+   * 문서에 함께 담기므로 붙일 때 작게 줄이고 장수·용량을 제한한다(`photo.ts`).
+   */
+  photos?: string[];
+  /**
+   * 사진 한 장만 담던 이전 판 필드. 새로 쓰지 않는다 —
+   * 문서를 열 때 `photos` 로 옮기고 지운다(`storage.ts`).
+   * @deprecated `photos` 를 쓴다.
+   */
+  photo?: string;
+}
+
+/** 칸의 사진 목록. 이전 판 문서(단일 `photo`)도 여기서 한 장짜리 목록으로 보인다. */
+export function cellPhotos(cell: EquipmentCell | undefined): string[] {
+  if (!cell) return [];
+  if (cell.photos && cell.photos.length > 0) return cell.photos;
+  return cell.photo ? [cell.photo] : [];
 }
 
 export interface PageDoc {
@@ -210,7 +228,7 @@ export function isInside(doc: { cols: number; rows: number }, p: Point): boolean
 }
 
 function isEmptyEquipment(cell: EquipmentCell): boolean {
-  return !cell.status && !cell.kind && !cell.label && !cell.memo;
+  return !cell.status && !cell.kind && !cell.label && !cell.memo && cellPhotos(cell).length === 0;
 }
 
 /** 팔레트 항목을 페이지 셀에 적용한다. */
@@ -294,14 +312,27 @@ export function eraseCells(doc: LayoutDoc, layer: LayerId, points: Point[]): Lay
   return { ...doc, background: p.background, equipment: p.equipment, wiring: p.wiring };
 }
 
+/** 칸 정보 편집 상자가 넘기는 값. `photo` 는 이전 판 호출부 호환용이다. */
+export type EquipmentInfoPatch = Pick<EquipmentCell, "label" | "memo" | "photos" | "photo">;
+
 export function updateEquipmentInfoOnPage(
   page: PageDoc,
   key: string,
-  patch: Pick<EquipmentCell, "label" | "memo">,
+  patch: EquipmentInfoPatch,
 ): PageDoc {
   const merged: EquipmentCell = { ...page.equipment[key], ...patch };
   if (!merged.label) delete merged.label;
   if (!merged.memo) delete merged.memo;
+
+  // 사진은 목록 하나로 모은다. 이전 판 단일 필드는 여기서 사라진다.
+  // patch 에 사진 자리가 없으면 원래 칸의 사진을 그대로 둔다.
+  const photos =
+    patch.photos !== undefined || patch.photo !== undefined
+      ? cellPhotos({ photos: patch.photos, photo: patch.photo })
+      : cellPhotos(page.equipment[key]);
+  delete merged.photo;
+  if (photos.length > 0) merged.photos = photos;
+  else delete merged.photos;
 
   const equipment = { ...page.equipment };
   if (isEmptyEquipment(merged)) delete equipment[key];
@@ -313,7 +344,7 @@ export function updateEquipmentInfoOnPage(
 export function updateEquipmentInfo(
   doc: LayoutDoc,
   key: string,
-  patch: Pick<EquipmentCell, "label" | "memo">,
+  patch: EquipmentInfoPatch,
 ): LayoutDoc {
   const p = updateEquipmentInfoOnPage(
     {

@@ -1,9 +1,38 @@
-import { DOC_VERSION, type PageDoc, type ProjectDoc } from "./doc";
+import { type EquipmentCell, DOC_VERSION, type PageDoc, type ProjectDoc } from "./doc";
 import { ensurePalette } from "./paletteOps";
 import { type PagePaper, sanitizePaper } from "./paper";
+import { sanitizePhotos } from "./photo";
 
 export const STORAGE_KEY = "rfid-grid-editor:project:v2";
 export const LEGACY_STORAGE_KEY = "rfid-grid-editor:doc:v1";
+
+/**
+ * 설비 칸을 다듬는다.
+ *
+ * 사진만 검사한다. 도면에 함께 담기는 값이라, 그림이 아닌 문자열이나 지나치게
+ * 큰 값이 섞여 들어오면 문서를 열 때마다 그 무게를 그대로 짊어진다.
+ * 나머지 값(상태 · 장비 · ID · 메모)은 팔레트 조회와 렌더러가 알아서 감당한다.
+ *
+ * 여기가 사진 한 장(`photo`)만 담던 이전 판 문서를 목록(`photos`)으로 옮기는
+ * 자리이기도 하다. 문서를 여는 길은 모두 이 함수를 지나므로, 위쪽 코드는
+ * `photos` 하나만 보면 된다.
+ */
+function sanitizeEquipment(raw: unknown): Record<string, EquipmentCell> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, EquipmentCell> = {};
+
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== "object") continue;
+    const cell = { ...(value as EquipmentCell) };
+    const photos = sanitizePhotos(cell.photos, cell.photo);
+    delete cell.photo;
+    if (photos.length > 0) cell.photos = photos;
+    else delete cell.photos;
+    out[key] = cell;
+  }
+
+  return out;
+}
 
 export function sanitizeProject(input: unknown): ProjectDoc | null {
   if (!input || typeof input !== "object") return null;
@@ -19,7 +48,7 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
         cols: typeof rawPage.cols === "number" ? Math.max(10, Math.min(200, rawPage.cols)) : 48,
         rows: typeof rawPage.rows === "number" ? Math.max(10, Math.min(200, rawPage.rows)) : 30,
         background: (rawPage.background ?? {}) as PageDoc["background"],
-        equipment: (rawPage.equipment ?? {}) as PageDoc["equipment"],
+        equipment: sanitizeEquipment(rawPage.equipment),
         wiring: (rawPage.wiring ?? {}) as PageDoc["wiring"],
         ...(sanitizePaper(rawPage.paper) ? { paper: sanitizePaper(rawPage.paper) as PagePaper } : {}),
       };
@@ -47,7 +76,7 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
       cols: typeof raw.cols === "number" ? Math.max(10, Math.min(200, raw.cols)) : 48,
       rows: typeof raw.rows === "number" ? Math.max(10, Math.min(200, raw.rows)) : 30,
       background: (raw.background ?? {}) as PageDoc["background"],
-      equipment: (raw.equipment ?? {}) as PageDoc["equipment"],
+      equipment: sanitizeEquipment(raw.equipment),
       wiring: (raw.wiring ?? {}) as PageDoc["wiring"],
     };
 
@@ -139,6 +168,20 @@ export function downloadJson(project: ProjectDoc, filename: string) {
 export function downloadCanvasPng(canvas: HTMLCanvasElement, filename: string) {
   const url = canvas.toDataURL("image/png");
   triggerDownload(url, filename);
+}
+
+/** data URL 하나를 파일로 내려받는다. 칸 사진이 이 길로 나간다. */
+export function downloadDataUrl(dataUrl: string, filename: string) {
+  triggerDownload(dataUrl, filename);
+}
+
+/** 파일 이름으로 쓸 수 있게 다듬는다. 남는 것이 없으면 `배치도`. */
+export function safeFileName(title: string): string {
+  const cleaned = title
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, "-");
+  return cleaned.length > 0 ? cleaned : "배치도";
 }
 
 export function fileStamp(): string {

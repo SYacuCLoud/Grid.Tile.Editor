@@ -13,6 +13,7 @@ interface ToolbarProps {
   hasSelection: boolean;
   hasClipboard: boolean;
   showGrid: boolean;
+  showRuler: boolean;
   cell: number;
   savedAt: string | null;
   onTitle: (value: string) => void;
@@ -23,10 +24,15 @@ interface ToolbarProps {
   onCut: () => void;
   onPaste: () => void;
   onShowGrid: (value: boolean) => void;
+  onShowRuler: (value: boolean) => void;
   onZoom: (delta: number) => void;
   onExportJson: () => void;
   onImportJson: () => void;
   onExportPng: () => void;
+  /** 도면에 붙은 사진 총 장수. 0 이면 사진 대장 단추를 잠근다. */
+  photoCount: number;
+  onPrintPhotoLedger: () => void;
+  onDownloadPhotos: () => void;
   onLoadSample: () => void;
   onReset: () => void;
 }
@@ -106,6 +112,14 @@ export function Toolbar(props: ToolbarProps) {
           <input type="checkbox" checked={props.showGrid} onChange={(event) => props.onShowGrid(event.target.checked)} />
           격자선
         </label>
+        <label className="flex items-center gap-1 text-[12px] text-slate-700" title="도면 위·왼쪽에 칸 번호를 붙인다">
+          <input
+            type="checkbox"
+            checked={props.showRuler}
+            onChange={(event) => props.onShowRuler(event.target.checked)}
+          />
+          눈금자
+        </label>
       </div>
 
       <div className="ml-auto flex items-center gap-1">
@@ -114,6 +128,32 @@ export function Toolbar(props: ToolbarProps) {
         </span>
         <button type="button" className={BUTTON} onClick={props.onExportPng} title="현재 선택된 페이지의 배치도 및 범례를 PNG 이미지로 내보냅니다">
           PNG 저장 (현재 페이지)
+        </button>
+        <button
+          type="button"
+          className={BUTTON}
+          onClick={props.onPrintPhotoLedger}
+          disabled={props.photoCount === 0}
+          title={
+            props.photoCount === 0
+              ? "칸에 붙은 사진이 없습니다"
+              : `붙어 있는 사진 ${props.photoCount}장을 좌표 · 장비 ID · 메모와 함께 A4 대장으로 인쇄합니다`
+          }
+        >
+          사진 대장 인쇄{props.photoCount > 0 ? ` (${props.photoCount}장)` : ""}
+        </button>
+        <button
+          type="button"
+          className={BUTTON}
+          onClick={props.onDownloadPhotos}
+          disabled={props.photoCount === 0}
+          title={
+            props.photoCount === 0
+              ? "칸에 붙은 사진이 없습니다"
+              : "붙어 있는 사진을 좌표 · 장비 ID 가 담긴 파일 이름으로 낱장 저장합니다"
+          }
+        >
+          사진 일괄 저장
         </button>
         <button type="button" className={BUTTON} onClick={props.onExportJson}>
           JSON 내보내기

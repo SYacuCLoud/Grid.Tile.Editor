@@ -1,5 +1,6 @@
 "use client";
 
+import { DEFAULT_PRINT_DPI } from "./printSheet";
 import {
   DEFAULT_CELL_MM,
   DEFAULT_MARGIN_MM,
@@ -124,6 +125,11 @@ export function PaperForm(props: PaperFormProps) {
         <br />
         이 격자({cols} × {rows}) + 범례 {band}행은{" "}
         <span className="font-semibold text-slate-900">가로 {count.across} · 세로 {count.down} = {count.total}장</span>
+      </p>
+
+      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+        `PNG 저장` 은 이 용지 규격({DEFAULT_PRINT_DPI}dpi)으로 뽑습니다.
+        {count.total > 1 ? ` 장마다 파일이 나뉘어 ${count.total}개가 내려받아집니다.` : " 100% 배율로 인쇄하면 화면 경계선과 자리가 맞습니다."}
       </p>
 
       <button

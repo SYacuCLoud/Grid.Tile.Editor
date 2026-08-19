@@ -37,8 +37,8 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
   const [lineStyle, setLineStyle] = useState<LineStyle>(props.initialLineStyle ?? DEFAULT_LINE_STYLE);
   const [error, setError] = useState<string | null>(null);
 
-  // 장비는 칸을 채우지 않고 테두리로 보인다. 채움 무늬를 골라도 쓸 곳이 없다.
-  const showPattern = props.role !== "kind";
+  // 칸을 통째로 채우는 분류만 무늬를 쓴다. 장비는 테두리로, 배선은 경로 선으로 보인다.
+  const showPattern = props.role !== "kind" && props.role !== "wire";
   const showLineStyle = props.role === "kind" || props.role === "wire";
 
   const submit = () => {

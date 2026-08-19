@@ -3,24 +3,26 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { CellNotePopover } from "./CellNotePopover";
 import { legendBandCells, legendColumns, sheetCells } from "./paper";
-import { parseCellKey } from "./doc";
+import { cellPhotos, parseCellKey } from "./doc";
 import { GridCanvas } from "./GridCanvas";
 import { InspectorPanel } from "./InspectorPanel";
 import { PageTabs } from "./PageTabs";
 import { PalettePanel } from "./PalettePanel";
-import { legendItemsForProject } from "./paletteOps";
-import { renderSheet, sheetPixelSize } from "./render";
+import { legendItemsForPage } from "./paletteOps";
+import { canvasCells, renderSheet, sheetPixelSize } from "./render";
+import { Ruler, RulerCorner } from "./Ruler";
+import { HistoryPanel } from "./server/HistoryPanel";
+import { ServerBar } from "./server/ServerBar";
+import { useServerProjects } from "./server/useServerProjects";
+import { downloadPhotos, openPhotoLedger } from "./photoExport";
+import { collectPhotoEntries, ledgerSubtitle } from "./photoLedger";
+import { DEFAULT_PRINT_DPI, planPrint, printSheetSuffix, renderPrintSheet } from "./printSheet";
 import { anchoredScroll, panScroll, type ScrollAnchor, type WheelAnchor } from "./zoom";
-import { downloadCanvasPng, downloadJson, fileStamp, parseProjectJson } from "./storage";
+import { downloadCanvasPng, downloadJson, fileStamp, parseProjectJson, safeFileName } from "./storage";
 import { Toolbar } from "./Toolbar";
 import { useEditor } from "./useEditor";
 
 const PNG_SCALE = 2;
-
-function safeFileName(title: string): string {
-  const cleaned = title.trim().replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, "-");
-  return cleaned.length > 0 ? cleaned : "배치도";
-}
 
 export function GridEditor() {
   const { state, actions } = useEditor();
@@ -111,10 +113,48 @@ export function GridEditor() {
   }, [state.cell]);
 
 
-  // 범례는 프로젝트 공용 팔레트 기준이다. 다른 페이지에서만 쓰이는 항목의 색 설명도 남는다.
-  const legend = useMemo(() => legendItemsForProject(state.project), [state.project]);
+  // 범례는 **보고 있는 페이지에서 실제로 쓴 항목**만 담는다. 팔레트는 프로젝트 공용이라
+  // 다른 페이지에서만 쓰는 항목까지 넣으면 범례 띠가 길어지고 인쇄 자리를 잡아먹는다.
+  const legend = useMemo(
+    () => legendItemsForPage(state.project.palette, state.activePageDoc),
+    [state.activePageDoc, state.project.palette],
+  );
+
+  // 로컬 폴더(.grid-projects) 기반 공유. 서버가 없는 자리에서는 스스로 접힌다.
+  // 워터마크에 리비전 · 작성자를 적으므로 내보내기보다 먼저 둔다.
+  const server = useServerProjects(state.project, actions.replaceProject);
 
   const exportPng = useCallback(() => {
+    const stamp = fileStamp();
+    const base = `${safeFileName(state.project.title)}-${safeFileName(state.activePageDoc.name)}-${stamp}`;
+    const paper = state.activePageDoc.paper;
+
+    // 종이만 보고도 어느 판인지 가릴 수 있게 출처를 여백에 남긴다.
+    const meta = {
+      title: state.project.title,
+      revision: server.baseRevision,
+      author: server.author,
+      printedAt: new Date(),
+    };
+
+    // 용지를 정해 두었으면 그 규격 그대로 뽑는다. 이미지 크기 = 용지 크기(mm→px)이고,
+    // 여러 장에 걸치면 장마다 파일을 나눈다. 화면 경계선과 장수·자리가 같다.
+    if (paper) {
+      const plan = planPrint(state.doc, paper, legend.length, DEFAULT_PRINT_DPI);
+      for (let index = 0; index < plan.total; index += 1) {
+        const canvas = document.createElement("canvas");
+        canvas.width = plan.pageWidth;
+        canvas.height = plan.pageHeight;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        renderPrintSheet(ctx, state.doc, plan, index, state.visible, legend, meta);
+        downloadCanvasPng(canvas, `${base}-${printSheetSuffix(plan, index)}.png`);
+      }
+      return;
+    }
+
     const size = sheetPixelSize(state.doc, state.cell, legend);
     const canvas = document.createElement("canvas");
     canvas.width = size.width * PNG_SCALE;
@@ -124,12 +164,46 @@ export function GridEditor() {
     if (!ctx) return;
 
     ctx.setTransform(PNG_SCALE, 0, 0, PNG_SCALE, 0, 0);
-    renderSheet(ctx, state.doc, state.cell, state.visible, legend);
-    downloadCanvasPng(
-      canvas,
-      `${safeFileName(state.project.title)}-${safeFileName(state.activePageDoc.name)}-${fileStamp()}.png`,
+    renderSheet(ctx, state.doc, state.cell, state.visible, legend, meta);
+    downloadCanvasPng(canvas, `${base}.png`);
+  }, [
+    legend,
+    server.author,
+    server.baseRevision,
+    state.activePageDoc.name,
+    state.activePageDoc.paper,
+    state.cell,
+    state.doc,
+    state.project.title,
+    state.visible,
+  ]);
+
+  // 사진 대장은 프로젝트 전체를 훑는다 — 층을 넘나드는 현장에서 페이지마다
+  // 따로 뽑으면 대장 구실을 못한다. 인쇄물에서는 페이지 이름으로 갈라 준다.
+  const photoEntries = useMemo(() => collectPhotoEntries(state.project), [state.project]);
+
+  const printPhotoLedger = useCallback(() => {
+    const opened = openPhotoLedger(photoEntries, {
+      title: `${state.project.title} 사진 대장`,
+      subtitle: ledgerSubtitle({
+        count: photoEntries.length,
+        revision: server.baseRevision,
+        author: server.author,
+        printedAt: new Date(),
+      }),
+    });
+    if (!opened) window.alert("팝업이 막혀 사진 대장을 열지 못했습니다. 이 사이트의 팝업을 허용해 주십시오.");
+  }, [photoEntries, server.author, server.baseRevision, state.project.title]);
+
+  const downloadAllPhotos = useCallback(() => {
+    if (photoEntries.length === 0) return;
+    // 낱장으로 나가므로 장수를 먼저 알린다. 브라우저 설정에 따라 저장 위치를
+    // 장마다 물을 수도 있어서, 모르고 누르면 곤란해진다.
+    const ok = window.confirm(
+      `사진 ${photoEntries.length}장을 각각 파일로 저장합니다. 브라우저가 여러 파일 저장을 물으면 허용해 주십시오. 계속하시겠습니까?`,
     );
-  }, [legend, state.activePageDoc.name, state.cell, state.doc, state.project.title, state.visible]);
+    if (ok) void downloadPhotos(photoEntries);
+  }, [photoEntries]);
 
   const exportJson = useCallback(() => {
     downloadJson(state.project, `${safeFileName(state.project.title)}-${fileStamp()}.json`);
@@ -164,6 +238,7 @@ export function GridEditor() {
         point: parseCellKey(state.noteKey),
         label: state.doc.equipment[state.noteKey]?.label ?? "",
         memo: state.doc.equipment[state.noteKey]?.memo ?? "",
+        photos: cellPhotos(state.doc.equipment[state.noteKey]),
       }
     : null;
 
@@ -194,6 +269,13 @@ export function GridEditor() {
     };
   }, [legend, state.activePageDoc.paper]);
 
+  // 눈금자는 캔버스와 같은 칸 수를 써야 도면과 어긋나지 않는다.
+  // 인쇄 경계선을 켜면 캔버스가 용지 범위까지 넓어진다는 점까지 같이 본다.
+  const canvasSize = useMemo(
+    () => canvasCells(state.doc, printGuide, printLegend?.bandCells ?? 0),
+    [printGuide, printLegend?.bandCells, state.doc],
+  );
+
   const cursor = state.tool === "pick" ? "pointer" : state.tool === "eraser" ? "cell" : "crosshair";
   const activeItem = state.tool === "eraser" ? null : state.activeItem;
 
@@ -207,6 +289,7 @@ export function GridEditor() {
         hasSelection={!!state.selectionRange}
         hasClipboard={!!state.clipboard}
         showGrid={state.showGrid}
+        showRuler={state.showRuler}
         cell={state.cell}
         savedAt={state.savedAt}
         onTitle={actions.setTitle}
@@ -217,13 +300,20 @@ export function GridEditor() {
         onCut={actions.cut}
         onPaste={actions.paste}
         onShowGrid={actions.setShowGrid}
+        onShowRuler={actions.setShowRuler}
         onZoom={actions.zoomBy}
         onExportJson={exportJson}
         onImportJson={importJson}
         onExportPng={exportPng}
+        photoCount={photoEntries.length}
+        onPrintPhotoLedger={printPhotoLedger}
+        onDownloadPhotos={downloadAllPhotos}
         onLoadSample={actions.loadSample}
         onReset={resetAll}
       />
+
+      <ServerBar state={server} actions={server.actions} />
+      <HistoryPanel state={server} actions={server.actions} />
 
       <PageTabs
         pages={state.project.pages}
@@ -249,7 +339,20 @@ export function GridEditor() {
         />
 
         <main ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-slate-200 p-4">
-          <GridCanvas
+          {/* 눈금자는 스크롤 상자 안에서 sticky 로 붙어 도면과 함께 움직인다. */}
+          {state.showRuler ? (
+            <div className="flex w-fit">
+              <RulerCorner />
+              <Ruler orientation="horizontal" count={canvasSize.cols} cell={state.cell} highlight={state.hover?.x ?? null} />
+            </div>
+          ) : null}
+
+          <div className="flex w-fit">
+            {state.showRuler ? (
+              <Ruler orientation="vertical" count={canvasSize.rows} cell={state.cell} highlight={state.hover?.y ?? null} />
+            ) : null}
+
+            <GridCanvas
             doc={state.doc}
             cell={state.cell}
             visible={state.visible}
@@ -284,12 +387,16 @@ export function GridEditor() {
                 rows={state.doc.rows}
                 initialLabel={noteCell.label}
                 initialMemo={noteCell.memo}
+                initialPhotos={noteCell.photos}
+                pageId={state.project.activePageId}
+                pageName={state.activePageDoc.name}
                 caption={noteCaption}
                 onSave={(value) => actions.saveNote(noteCell.key, value)}
                 onClose={actions.closeNote}
               />
             ) : null}
-          </GridCanvas>
+            </GridCanvas>
+          </div>
         </main>
 
         <InspectorPanel

@@ -180,7 +180,9 @@ test("PNG 범례: 견본이 도면과 같은 무늬·선 모양으로 그려진�
   const page = project.pages[0];
   setPattern(project, "installed", "hatch");
   setLineStyle(project, "reader", "dotted");
+  setLineStyle(project, "wirePurple", "dashed");
   page.equipment["1,1"] = { status: "installed", kind: "reader" };
+  page.wiring["2,2"] = "wirePurple";
 
   const ctx = recordingContext();
   renderSheet(ctx, layout(project), CELL, VISIBLE, legendItemsForProject(project));
@@ -193,6 +195,12 @@ test("PNG 범례: 견본이 도면과 같은 무늬·선 모양으로 그려진�
   const kindBox = ctx.ops.find((op) => op.op === "strokeRect" && op.color === "#0f766e");
   assert.ok(kindBox);
   assert.ok(kindBox.dash.length > 0);
+
+  // 배선 견본은 칸을 채우지 않고 가로지르는 파선으로 그린다.
+  const wireLine = ctx.ops.find((op) => op.op === "stroke" && op.color === "#7c3aed");
+  assert.ok(wireLine, "배선 견본은 선으로 그린다");
+  assert.ok(wireLine.dash.length > 0);
+  assert.equal(wireLine.from.y, wireLine.to.y, "가로지르는 선이다");
 });
 
 test("팔레트 편집: 무늬·선 모양을 저장하고 기본값은 남기지 않는다", () => {
@@ -274,4 +282,129 @@ test("선택 목록: 무늬 5종과 선 모양 3종을 모두 고를 수 있다"
   );
   assert.ok(FILL_PATTERNS.every((item) => item.name.length > 0));
   assert.ok(LINE_STYLES.every((item) => item.name.length > 0));
+});
+
+test("배선 무늬: 배선은 무늬를 쓰지 않는다 — 저장 파일에 남아 있어도 무시한다", () => {
+  const project = createProject("배선 무늬 무시");
+  const page = project.pages[0];
+  // 예전 판에서 저장된 무늬가 남아 있는 상황.
+  setPattern(project, "wirePurple", "hatch");
+  page.wiring["4,4"] = "wirePurple";
+  page.wiring["5,4"] = "wirePurple";
+
+  const ctx = recordingContext();
+  renderDoc(ctx, layout(project), { cell: CELL, visible: VISIBLE, showGrid: false });
+
+  // 무늬 줄을 긋지 않고 예전처럼 띠로만 채운다.
+  assert.equal(ctx.ops.filter((op) => op.op === "stroke" && op.color === "#7c3aed").length, 0);
+  assert.ok(ctx.ops.some((op) => op.op === "fillRect" && op.color === "#7c3aed" && op.alpha === 1));
+});
+
+test("배선 무늬: 팔레트에 넣어도 저장되지 않는다", () => {
+  const base = createProject("배선 무늬 저장").palette;
+  const { created } = addPaletteEntry(base, "wire", {
+    name: "새 배선",
+    color: "#7c3aed",
+    description: "",
+    pattern: "hatch",
+    lineStyle: "dashed",
+  });
+  assert.equal("pattern" in created, false, "배선에는 무늬를 남기지 않는다");
+  assert.equal(created.lineStyle, "dashed");
+
+  // 예전 파일에 남은 배선 무늬도 불러올 때 버린다.
+  const palette = ensurePalette([
+    { id: "w", name: "옛 배선", role: "wire", color: "#7c3aed", pattern: "dots", lineStyle: "dotted" },
+  ]);
+  const wire = palette.find((item) => item.id === "w");
+  assert.equal(wire.pattern, undefined);
+  assert.equal(wire.lineStyle, "dotted");
+});
+
+test("배선 점선: 이웃 칸과 위상이 이어지고 곧게 지나가는 칸은 매듭을 넣지 않는다", () => {
+  const project = createProject("배선 점선");
+  const page = project.pages[0];
+  setLineStyle(project, "wirePurple", "dotted");
+  // 가로로 곧게 이어지는 세 칸.
+  page.wiring["3,4"] = "wirePurple";
+  page.wiring["4,4"] = "wirePurple";
+  page.wiring["5,4"] = "wirePurple";
+
+  const ctx = recordingContext();
+  renderDoc(ctx, layout(project), { cell: CELL, visible: VISIBLE, showGrid: false });
+
+  const strokes = ctx.ops.filter((op) => op.op === "stroke" && op.color === "#7c3aed");
+  assert.ok(strokes.length > 0);
+  // 언제나 왼쪽→오른쪽으로 긋고, dash 위상을 그 선의 절대 좌표에 맞춘다.
+  assert.ok(strokes.every((op) => op.to.x >= op.from.x && op.to.y >= op.from.y));
+  assert.ok(strokes.every((op) => op.dashOffset === op.from.x || op.dashOffset === op.from.y));
+
+  // 가운데 칸(4,4)은 곧게 지나가므로 매듭을 채우지 않는다.
+  const knots = ctx.ops.filter((op) => op.op === "fillRect" && op.color === "#7c3aed");
+  const center = { x: 4 * CELL + CELL / 2, y: 4 * CELL + CELL / 2 };
+  assert.equal(
+    knots.filter((op) => Math.abs(op.x + op.w / 2 - center.x) < 0.01 && Math.abs(op.y + op.h / 2 - center.y) < 0.01)
+      .length,
+    0,
+  );
+  // 양 끝 칸은 끝맺음이므로 매듭이 있다.
+  assert.ok(knots.length >= 2);
+});
+
+test("배선 점선: 모퉁이에는 매듭을 채워 끊겨 보이지 않게 한다", () => {
+  const project = createProject("배선 모퉁이");
+  const page = project.pages[0];
+  setLineStyle(project, "wirePurple", "dashed");
+  // (4,4) 에서 오른쪽과 아래로 꺾인다.
+  page.wiring["4,4"] = "wirePurple";
+  page.wiring["5,4"] = "wirePurple";
+  page.wiring["4,5"] = "wirePurple";
+
+  const ctx = recordingContext();
+  renderDoc(ctx, layout(project), { cell: CELL, visible: VISIBLE, showGrid: false });
+
+  const center = { x: 4 * CELL + CELL / 2, y: 4 * CELL + CELL / 2 };
+  const knot = ctx.ops.find(
+    (op) =>
+      op.op === "fillRect" &&
+      op.color === "#7c3aed" &&
+      Math.abs(op.x + op.w / 2 - center.x) < 0.01 &&
+      Math.abs(op.y + op.h / 2 - center.y) < 0.01,
+  );
+  assert.ok(knot, "모퉁이 칸에는 매듭이 있어야 한다");
+});
+
+test("글자 시인성: 밝은 바탕이든 어두운 바탕이든 반대색 테두리를 두른다", () => {
+  const project = createProject("글자 대비");
+  const page = project.pages[0];
+  // 밝은 노랑(미연결) 위에는 검은 글자 + 흰 테두리.
+  page.equipment["1,1"] = { status: "unlinked", label: "C1" };
+  // 어두운 파랑(기존 장비) 위에는 흰 글자 + 검은 테두리.
+  page.equipment["3,1"] = { status: "existing", label: "C2" };
+
+  const ctx = recordingContext();
+  renderDoc(ctx, layout(project), { cell: 32, visible: VISIBLE, showGrid: false });
+
+  const halo = (text) => ctx.ops.find((op) => op.op === "strokeText" && op.text === text);
+  assert.ok(halo("C1"), "글자마다 테두리를 먼저 그린다");
+  assert.ok(halo("C1").color.includes("255, 255, 255"));
+  assert.ok(halo("C2").color.includes("16, 20, 24"));
+  assert.ok(halo("C1").lineWidth > 0);
+
+  // 테두리를 그린 뒤에 글자를 채운다. 순서가 뒤집히면 글자가 가려진다.
+  const strokeAt = ctx.ops.findIndex((op) => op.op === "strokeText" && op.text === "C1");
+  const fillAt = ctx.ops.findIndex((op) => op.op === "fillText" && op.text === "C1");
+  assert.ok(strokeAt < fillAt);
+});
+
+test("글자 시인성: 무늬 칸 위의 장비 이름에도 테두리가 붙는다", () => {
+  const project = createProject("무늬 위 글자");
+  const page = project.pages[0];
+  setPattern(project, "installed", "crosshatch");
+  page.equipment["2,2"] = { status: "installed", kind: "reader" };
+
+  const ctx = recordingContext();
+  renderDoc(ctx, layout(project), { cell: 32, visible: VISIBLE, showGrid: false });
+
+  assert.ok(ctx.ops.some((op) => op.op === "strokeText" && op.text === "리더"));
 });

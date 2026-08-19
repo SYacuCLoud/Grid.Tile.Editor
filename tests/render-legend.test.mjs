@@ -2,9 +2,75 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createProject } from "../app/editor/doc.ts";
 import { renderDoc, renderSheet } from "../app/editor/render.ts";
-import { legendItemsForProject } from "../app/editor/paletteOps.ts";
+import { legendItems, legendItemsForPage, legendItemsForProject } from "../app/editor/paletteOps.ts";
 import { recordingContext, VISIBLE } from "./recording-context.mjs";
 
+
+test("범례: 팔레트에 있어도 쓰지 않은 항목은 넣지 않는다", () => {
+  const project = createProject("쓴 것만");
+  const page = project.pages[0];
+  page.equipment["1,1"] = { status: "installed", kind: "reader" };
+  page.background["0,0"] = "wall";
+
+  const legend = legendItemsForPage(project.palette, page);
+  const ids = legend.map((item) => item.id);
+
+  assert.deepEqual(ids.sort(), ["installed", "reader", "wall"].sort());
+  assert.ok(project.palette.length > legend.length, "기본 팔레트에는 쓰지 않은 항목이 더 있다");
+});
+
+test("범례: 페이지마다 따로 센다", () => {
+  const project = createProject("페이지별");
+  const first = project.pages[0];
+  const second = { ...first, id: "page-2", background: {}, equipment: {}, wiring: {} };
+  project.pages = [first, second];
+
+  first.equipment["1,1"] = { status: "installed" };
+  second.wiring["2,2"] = "wirePurple";
+
+  assert.deepEqual(
+    legendItemsForPage(project.palette, first).map((item) => item.id),
+    ["installed"],
+  );
+  assert.deepEqual(
+    legendItemsForPage(project.palette, second).map((item) => item.id),
+    ["wirePurple"],
+  );
+  // 프로젝트 기준은 두 페이지를 합쳐 센다.
+  assert.deepEqual(
+    legendItemsForProject(project).map((item) => item.id).sort(),
+    ["installed", "wirePurple"].sort(),
+  );
+  // 빈 페이지의 범례는 비어 있다 — 인쇄할 때 범례 띠 자리를 먹지 않는다.
+  const empty = { ...first, id: "page-3", background: {}, equipment: {}, wiring: {} };
+  assert.deepEqual(legendItemsForPage(project.palette, empty), []);
+});
+
+test("범례: 팔레트에서 지웠어도 칸에 남아 있으면 범례에 남는다", () => {
+  const project = createProject("지운 항목");
+  const page = project.pages[0];
+  page.equipment["1,1"] = { status: "installed" };
+  project.palette = project.palette.map((item) =>
+    item.id === "installed" ? { ...item, retired: true } : item,
+  );
+
+  assert.deepEqual(
+    legendItemsForPage(project.palette, page).map((item) => item.id),
+    ["installed"],
+  );
+});
+
+test("범례: LayoutDoc 기준(legendItems)도 같은 규칙을 쓴다", () => {
+  const project = createProject("문서 기준");
+  const page = project.pages[0];
+  page.wiring["3,3"] = "wireOrange";
+  const doc = { ...page, palette: project.palette, version: 3, title: "t" };
+
+  assert.deepEqual(
+    legendItems(doc).map((item) => item.id),
+    ["wireOrange"],
+  );
+});
 
 test("PNG 범례: 장비는 테두리, 상태·배선은 채움으로 그린다", () => {
   const project = createProject("범례 렌더");
@@ -181,8 +247,14 @@ test("인쇄 경계선: 끄면 한 줄도 그리지 않는다", () => {
 test("인쇄 경계선: 범례 띠가 도면 아래에 그려지고 경계 안에 들어간다", () => {
   const project = createProject("범례 띠");
   const page = project.pages[0]; // 48 x 30
+  // 범례는 쓴 항목만 담는다. 띠를 그리려면 먼저 무언가 칠해 두어야 한다.
+  // 장비는 칸에도 이름이 찍혀 범례 글자와 헷갈리므로 여기서는 쓰지 않는다.
+  page.equipment["1,1"] = { status: "installed" };
+  page.background["0,0"] = "wall";
+  page.wiring["2,2"] = "wirePurple";
   const doc = { ...page, palette: project.palette, version: 3, title: "t" };
   const legend = legendItemsForProject(project);
+  assert.equal(legend.length, 3);
 
   const cell = 22;
   const ctx = recordingContext();
