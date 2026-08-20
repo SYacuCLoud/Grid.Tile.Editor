@@ -31,6 +31,20 @@
 
 ---
 
+## 🖼️ 도면 활용 예시
+
+### 1. 스마트 물류센터 구획도
+> 입출하 도크, 팔레트 랙, 컨베이어 반송 라인, RFID 리더 및 센서 점검 메모
+
+![스마트 물류센터 구획도](docs/images/smart-logistics-example.png)
+
+### 2. 대형 데이터센터 서버실 배치도
+> Cold/Hot Aisle 구획, 서버 랙, PDU, 항온항습기(CRAC), 전력 버스웨이 및 통신 배선
+
+![데이터센터 서버실 배치도](docs/images/datacenter-example.png)
+
+---
+
 ## ✨ Key Features
 
 ### 1. 고정 격자 드래그 편집
