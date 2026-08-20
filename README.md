@@ -33,12 +33,17 @@
 
 ## 🖼️ 도면 활용 예시
 
-### 1. 스마트 물류센터 구획도
-> 입출하 도크, 팔레트 랙, 컨베이어 반송 라인, RFID 리더 및 센서 점검 메모
+### 1. 스마트 물류센터 구획도 — 1층 입출하·보관 라인
+> 입출하 도크, 팔레트 랙, 컨베이어 반송 라인, RFID 리더 및 센서 점검 메모 팝오버
 
-![스마트 물류센터 구획도](docs/images/smart-logistics-example.png)
+![스마트 물류센터 구획도 1층](docs/images/smart-logistics-example.png)
 
-### 2. 대형 데이터센터 서버실 배치도
+### 2. 스마트 물류센터 구획도 — 옥외 야드·차량게이트 (다중 페이지 & 인쇄 영역)
+> 페이지 탭 전환, 옥외 입·출하존 무늬(빗금·교차빗금), A4 용지 규격 분할 인쇄 경계선 및 범례 띠
+
+![스마트 물류센터 구획도 옥외 야드](docs/images/smart-logistics-yard-example.png)
+
+### 3. 대형 데이터센터 서버실 배치도
 > Cold/Hot Aisle 구획, 서버 랙, PDU, 항온항습기(CRAC), 전력 버스웨이 및 통신 배선
 
 ![데이터센터 서버실 배치도](docs/images/datacenter-example.png)
