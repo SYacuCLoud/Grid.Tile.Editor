@@ -1,7 +1,9 @@
+import { defaultLayers, isBuiltinLayerId, type LayerDef } from "./layers";
 import {
   defaultPalette,
   type KindId,
   type LayerId,
+  type PaletteId,
   type PaletteItem,
   type StatusId,
   type TileId,
@@ -41,6 +43,9 @@ export function cellPhotos(cell: EquipmentCell | undefined): string[] {
   return cell.photo ? [cell.photo] : [];
 }
 
+/** 사용자 레이어의 칸 내용. 레이어 ID → (칸 키 → 팔레트 ID). */
+export type LayerCells = Record<string, Record<string, PaletteId>>;
+
 export interface PageDoc {
   id: string;
   name: string;
@@ -49,6 +54,11 @@ export interface PageDoc {
   background: Record<string, TileId>;
   equipment: Record<string, EquipmentCell>;
   wiring: Record<string, WireId>;
+  /**
+   * 사용자가 만든 레이어의 칸. 기본 3종은 위의 제자리에 그대로 담긴다 —
+   * 그래서 이 필드가 없는 이전 문서도 한 글자 고치지 않고 열린다.
+   */
+  layerCells?: LayerCells;
   /**
    * 인쇄 용지 설정. 없으면 인쇄 경계선을 그리지 않는다.
    * 격자 칸 수와 PNG 내보내기에는 영향을 주지 않는다.
@@ -61,6 +71,8 @@ export interface ProjectDoc {
   title: string;
   activePageId: string;
   pages: PageDoc[];
+  /** 레이어 구성과 그리는 순서. 앞이 아래, 뒤가 위. */
+  layers: LayerDef[];
   /** 사용자가 관리하는 상태 · 장비 · 배선 팔레트. 프로젝트 전체에서 공유된다. */
   palette: PaletteItem[];
 }
@@ -74,7 +86,70 @@ export interface LayoutDoc {
   background: Record<string, TileId>;
   equipment: Record<string, EquipmentCell>;
   wiring: Record<string, WireId>;
+  layerCells?: LayerCells;
+  layers: LayerDef[];
   palette: PaletteItem[];
+}
+
+/** 칸을 담고 있는 것 — `PageDoc` 과 `LayoutDoc` 이 모두 만족한다. */
+export interface CellHolder {
+  background: Record<string, TileId>;
+  equipment: Record<string, EquipmentCell>;
+  wiring: Record<string, WireId>;
+  layerCells?: LayerCells;
+}
+
+/**
+ * 한 레이어의 칸 맵을 읽는다.
+ *
+ * 기본 3종은 문서에 제자리가 있고 사용자 레이어는 `layerCells` 안에 있다. 이
+ * 함수와 `withLayerCells` 만 그 갈림길을 안다 — 위쪽 코드는 레이어 ID 하나만
+ * 들고 다니면 된다. (설비는 값 모양이 다르므로 여기서는 다루지 않는다.)
+ */
+export function paintedCells(holder: CellHolder, layerId: string): Record<string, PaletteId> {
+  if (layerId === "background") return holder.background;
+  if (layerId === "wiring") return holder.wiring;
+  if (layerId === "equipment") return {};
+  return holder.layerCells?.[layerId] ?? {};
+}
+
+/** 한 레이어의 칸 맵을 갈아 끼운 사본. 빈 맵이면 자리를 아예 비운다. */
+export function withLayerCells<T extends CellHolder>(
+  holder: T,
+  layerId: string,
+  cells: Record<string, PaletteId>,
+): T {
+  if (layerId === "background") return { ...holder, background: cells };
+  if (layerId === "wiring") return { ...holder, wiring: cells };
+  if (layerId === "equipment") return holder;
+
+  const layerCells: LayerCells = { ...holder.layerCells };
+  if (Object.keys(cells).length > 0) layerCells[layerId] = cells;
+  else delete layerCells[layerId];
+
+  const next = { ...holder };
+  if (Object.keys(layerCells).length > 0) next.layerCells = layerCells;
+  else delete next.layerCells;
+  return next;
+}
+
+/** 이 문서에 칸이 담긴 사용자 레이어 ID 들. 비교·복사가 훑을 자리다. */
+export function usedLayerIds(holder: CellHolder): string[] {
+  return Object.keys(holder.layerCells ?? {});
+}
+
+/**
+ * 이 레이어에 칸이 몇 개 놓여 있는가 — 프로젝트의 모든 페이지를 합쳐 센다.
+ * 비우기·삭제를 확인할 때 "무엇을 잃는지" 를 숫자로 보여 주려는 것이다.
+ */
+export function layerCellCount(project: ProjectDoc, layerId: string): number {
+  let total = 0;
+  for (const page of project.pages) {
+    total += layerId === "equipment"
+      ? Object.keys(page.equipment).length
+      : Object.keys(paintedCells(page, layerId)).length;
+  }
+  return total;
 }
 
 export interface Point {
@@ -110,6 +185,7 @@ export function createProject(title = "격자형 배치 프로젝트"): ProjectD
     title,
     activePageId: initialPage.id,
     pages: [initialPage],
+    layers: defaultLayers(),
     palette: defaultPalette(),
   };
 }
@@ -124,6 +200,7 @@ export function createDoc(cols = 48, rows = 30): LayoutDoc {
     background: {},
     equipment: {},
     wiring: {},
+    layers: defaultLayers(),
     palette: defaultPalette(),
   };
 }
@@ -143,6 +220,8 @@ export function activeLayoutDoc(project: ProjectDoc): LayoutDoc {
     background: page.background,
     equipment: page.equipment,
     wiring: page.wiring,
+    ...(page.layerCells ? { layerCells: page.layerCells } : {}),
+    layers: project.layers,
     palette: project.palette,
   };
 }
@@ -244,7 +323,12 @@ export function paintCellsOnPage(page: PageDoc, item: PaletteItem, points: Point
     if (!isInside(page, p)) continue;
     const key = cellKey(p.x, p.y);
 
-    if (item.role === "tile") {
+    // 사용자 레이어의 항목은 그리는 방식이 배경·배선과 같아도 자기 레이어에 담긴다.
+    if (!isBuiltinLayerId(item.layer)) {
+      const cells = { ...(next.layerCells?.[item.layer] ?? {}) };
+      cells[key] = item.id;
+      next.layerCells = { ...next.layerCells, [item.layer]: cells };
+    } else if (item.role === "tile") {
       next.background[key] = item.id as TileId;
     } else if (item.role === "wire") {
       next.wiring[key] = item.id as WireId;
@@ -285,14 +369,33 @@ export function eraseCellsOnPage(page: PageDoc, layer: LayerId, points: Point[])
     wiring: { ...page.wiring },
   };
 
+  const custom = !isBuiltinLayerId(layer);
+  const cells = custom ? { ...(page.layerCells?.[layer] ?? {}) } : null;
+
   for (const p of points) {
     const key = cellKey(p.x, p.y);
-    if (layer === "background") delete next.background[key];
+    if (cells) delete cells[key];
+    else if (layer === "background") delete next.background[key];
     else if (layer === "wiring") delete next.wiring[key];
     else delete next.equipment[key];
   }
 
-  return next;
+  return cells ? withLayerCells(next, layer, cells) : next;
+}
+
+/** 한 레이어의 칸을 통째로 비운다. 레이어는 남고 내용만 사라진다. */
+export function clearLayerOnPage(page: PageDoc, layer: string): PageDoc {
+  if (layer === "equipment") {
+    return Object.keys(page.equipment).length === 0 ? page : { ...page, equipment: {} };
+  }
+  if (Object.keys(paintedCells(page, layer)).length === 0) return page;
+  return withLayerCells(page, layer, {});
+}
+
+/** 레이어를 지울 때 그 칸도 함께 버린다. 남겨 두면 파일만 무거워진다. */
+export function dropLayerFromPage(page: PageDoc, layer: string): PageDoc {
+  if (!page.layerCells || !(layer in page.layerCells)) return page;
+  return withLayerCells(page, layer, {});
 }
 
 export function eraseCells(doc: LayoutDoc, layer: LayerId, points: Point[]): LayoutDoc {
@@ -375,7 +478,7 @@ export function resizePage(page: PageDoc, cols: number, rows: number): PageDoc {
     return out;
   };
 
-  return {
+  const next: PageDoc = {
     ...page,
     cols: nextCols,
     rows: nextRows,
@@ -383,6 +486,20 @@ export function resizePage(page: PageDoc, cols: number, rows: number): PageDoc {
     equipment: keep(page.equipment),
     wiring: keep(page.wiring),
   };
+
+  // 사용자 레이어도 같은 자로 자른다. 격자를 줄인 뒤 다시 늘렸을 때 밖에 있던
+  // 칸이 되살아나면 안 된다.
+  if (page.layerCells) {
+    const layerCells: LayerCells = {};
+    for (const [id, cells] of Object.entries(page.layerCells)) {
+      const kept = keep(cells);
+      if (Object.keys(kept).length > 0) layerCells[id] = kept;
+    }
+    if (Object.keys(layerCells).length > 0) next.layerCells = layerCells;
+    else delete next.layerCells;
+  }
+
+  return next;
 }
 
 export function resizeDoc(doc: LayoutDoc, cols: number, rows: number): LayoutDoc {

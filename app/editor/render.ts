@@ -1,4 +1,5 @@
-import { cellKey, cellPhotos, type LayoutDoc, type Point } from "./doc";
+import { cellKey, cellPhotos, type LayoutDoc, paintedCells, type Point } from "./doc";
+import { defaultLayers, type LayerDef } from "./layers";
 import {
   indexPalette,
   type LayerId,
@@ -18,7 +19,11 @@ export interface RenderOptions {
   visible: Record<LayerId, boolean>;
   showGrid: boolean;
   /** 드래그 중 미리보기. */
-  preview?: { item: PaletteItem | null; layer: LayerId; points: Point[] } | null;
+  preview?: {
+    item: PaletteItem | null;
+    layer: LayerId;
+    points: Point[];
+  } | null;
   selected?: string | null;
   selectionRange?: CellRange | null;
   hover?: Point | null;
@@ -31,7 +36,11 @@ export interface RenderOptions {
    * 인쇄 경계선 안에 미리 그려 볼 범례. 인쇄물에는 도면 아래로 범례가 함께
    * 실리므로, 이 자리를 비워 두지 않으면 실제 인쇄 영역과 어긋난다.
    */
-  printLegend?: { items: PaletteItem[]; bandCells: number; columns: number } | null;
+  printLegend?: {
+    items: PaletteItem[];
+    bandCells: number;
+    columns: number;
+  } | null;
 }
 
 const GRID_LINE = "#d3d9df";
@@ -89,9 +98,7 @@ function splitTwoLines(text: string): [string, string] {
   const candidates = [space, after].filter((index) => index > 0 && index < text.length - 1);
 
   if (candidates.length > 0) {
-    const at = candidates.reduce((best, index) =>
-      Math.abs(index - middle) < Math.abs(best - middle) ? index : best,
-    );
+    const at = candidates.reduce((best, index) => (Math.abs(index - middle) < Math.abs(best - middle) ? index : best));
     return [text.slice(0, at).trim(), text.slice(at + 1).trim()];
   }
   return [text.slice(0, middle), text.slice(middle)];
@@ -149,7 +156,11 @@ function planText(
   // 눌러도 넘칠 만큼 긴 이름은 잘라내고 말줄임을 붙인다. 이웃 칸을 침범하느니
   // 뒷글자를 접는 편이 낫다. 전체 이름은 팔레트 · 범례에서 볼 수 있다.
   if (width * scaleX > maxWidth) {
-    return { lines: [ellipsize(ctx, text, maxWidth / scaleX)], size: single, scaleX };
+    return {
+      lines: [ellipsize(ctx, text, maxWidth / scaleX)],
+      size: single,
+      scaleX,
+    };
   }
   return { lines: [text], size: single, scaleX };
 }
@@ -332,13 +343,7 @@ function drawWire(
  * 경로, 나머지는 칸 채움. 목록과 도면이 다르게 보이면 같은 색이 무엇을 뜻하는지
  * 읽을 수 없다.
  */
-function drawLegendSwatch(
-  ctx: CanvasRenderingContext2D,
-  item: PaletteItem,
-  x: number,
-  y: number,
-  box: number,
-) {
+function drawLegendSwatch(ctx: CanvasRenderingContext2D, item: PaletteItem, x: number, y: number, box: number) {
   const color = item.color as string;
 
   if (item.role === "kind") {
@@ -427,26 +432,19 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, width, height);
 
-  if (visible.background) {
-    for (const [key, tile] of Object.entries(doc.background)) {
-      const item = resolveItem(index, tile, "tile");
-      const [x, y] = key.split(",").map(Number);
-      fillCellPattern(ctx, x * cell, y * cell, cell, item.color as string, item.pattern);
-      if (item.glyph && cell >= 14) {
-        drawCenteredText(
-          ctx,
-          item.glyph,
-          x * cell + cell / 2,
-          y * cell + cell / 2,
-          cell - 4,
-          cell * 0.42,
-          textColorOn(item.color),
-        );
-      }
-    }
-  }
+  /**
+   * 레이어를 아래에서 위로 순서대로 그린다.
+   *
+   * 격자선은 채움 레이어 위, 표식 레이어(설비 · 배선) 아래에 한 번 긋는다.
+   * 채움은 칸을 덮는 바탕이고 표식은 그 위에 얹는 것이라, 격자선이 채움에
+   * 덮이면 칸 세는 눈금이 사라지고 표식을 덮으면 표식을 가린다.
+   */
+  const layers = doc.layers && doc.layers.length > 0 ? doc.layers : defaultLayers();
+  let gridDrawn = false;
 
-  if (showGrid) {
+  const drawGrid = () => {
+    gridDrawn = true;
+    if (!showGrid) return;
     ctx.lineWidth = 1;
     for (let x = 0; x <= doc.cols; x += 1) {
       ctx.strokeStyle = x % 5 === 0 ? GRID_LINE_STRONG : GRID_LINE;
@@ -462,88 +460,147 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
       ctx.lineTo(width, y * cell + 0.5);
       ctx.stroke();
     }
+  };
+
+  for (const layer of layers) {
+    if (!gridDrawn && layer.kind !== "fill") drawGrid();
+    // 표시 맵에 없는 레이어(예전 호출부가 넘긴 맵)는 보이는 것으로 본다.
+    if (layer.hidden === true || visible[layer.id] === false) continue;
+
+    if (layer.kind === "fill") drawFillLayer(ctx, doc, layer, index, cell);
+    else if (layer.kind === "wire") drawWireLayer(ctx, doc, layer, index, cell);
+    else drawEquipmentLayer(ctx, doc, index, cell);
   }
+  if (!gridDrawn) drawGrid();
 
-  if (visible.equipment) {
-    for (const [key, data] of Object.entries(doc.equipment)) {
-      const [x, y] = key.split(",").map(Number);
-      const px = x * cell;
-      const py = y * cell;
-      const status = data.status ? resolveItem(index, data.status, "status") : null;
+  renderOverlays(ctx, doc, options, extent, band);
+  ctx.restore();
+}
 
-      if (status) {
-        fillCellPattern(ctx, px, py, cell, status.color as string, status.pattern);
-      }
+/** 칸을 색으로 칠하는 레이어. 배경과 사용자 채움 레이어가 같은 길을 쓴다. */
+function drawFillLayer(
+  ctx: CanvasRenderingContext2D,
+  doc: LayoutDoc,
+  layer: LayerDef,
+  index: PaletteIndex,
+  cell: number,
+) {
+  for (const [key, id] of Object.entries(paintedCells(doc, layer.id))) {
+    const item = resolveItem(index, id, "tile");
+    const [x, y] = key.split(",").map(Number);
+    fillCellPattern(ctx, x * cell, y * cell, cell, item.color as string, item.pattern);
+    if (item.glyph && cell >= 14) {
+      drawCenteredText(
+        ctx,
+        item.glyph,
+        x * cell + cell / 2,
+        y * cell + cell / 2,
+        cell - 4,
+        cell * 0.42,
+        textColorOn(item.color),
+      );
+    }
+  }
+}
 
-      // 글자는 아래 깔린 채움색 위에서 읽히는 색으로 찍는다.
-      const textColor = status ? textColorOn(status.color) : LABEL_COLOR;
+/** 이웃한 칸끼리 선을 잇는 레이어. 배선과 사용자 선 레이어가 같은 길을 쓴다. */
+function drawWireLayer(
+  ctx: CanvasRenderingContext2D,
+  doc: LayoutDoc,
+  layer: LayerDef,
+  index: PaletteIndex,
+  cell: number,
+) {
+  const cells = paintedCells(doc, layer.id);
+  for (const [key, id] of Object.entries(cells)) {
+    const [x, y] = key.split(",").map(Number);
+    drawWire(ctx, cells, index, x, y, id, cell);
+  }
+}
 
-      if (data.kind) {
-        const kind = resolveItem(index, data.kind, "kind");
+function drawEquipmentLayer(ctx: CanvasRenderingContext2D, doc: LayoutDoc, index: PaletteIndex, cell: number) {
+  for (const [key, data] of Object.entries(doc.equipment)) {
+    const [x, y] = key.split(",").map(Number);
+    const px = x * cell;
+    const py = y * cell;
+    const status = data.status ? resolveItem(index, data.status, "status") : null;
 
-        // 장비 색은 테두리로 보인다. 상태 채움색을 가리지 않는다.
-        if (kind.color) {
-          ctx.strokeStyle = kind.color;
-          ctx.lineWidth = 2;
-          ctx.setLineDash(dashArray(kind.lineStyle, 2));
-          ctx.strokeRect(px + 1, py + 1, cell - 2, cell - 2);
-          ctx.setLineDash([]);
-        }
+    if (status) {
+      fillCellPattern(ctx, px, py, cell, status.color as string, status.pattern);
+    }
 
-        if (cell >= 12) {
-          const cy = data.label ? py + cell * 0.68 : py + cell / 2;
-          // 장비는 디스플레이 이름이 곧 칸에 찍히는 글자다.
-          // 장비 ID 가 함께 있으면 칸을 반으로 나눠 쓰므로 두 줄로 늘릴 자리가 없다.
-          const room = data.label ? cell * 0.4 : cell * 0.8;
-          drawCenteredText(ctx, kind.name, px + cell / 2, cy, cell - 5, cell * 0.36, textColor, room);
-        }
-      }
+    // 글자는 아래 깔린 채움색 위에서 읽히는 색으로 찍는다.
+    const textColor = status ? textColorOn(status.color) : LABEL_COLOR;
 
-      if (data.label && cell >= 12) {
-        const cy = data.kind ? py + cell * 0.28 : py + cell / 2;
-        const room = data.kind ? cell * 0.4 : cell * 0.8;
-        drawCenteredText(ctx, data.label, px + cell / 2, cy, cell - 5, cell * 0.34, textColor, room);
-      }
+    if (data.kind) {
+      const kind = resolveItem(index, data.kind, "kind");
 
-      if (data.memo) {
-        ctx.fillStyle = "#111827";
-        ctx.beginPath();
-        ctx.arc(px + cell - 4, py + 4, 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // 사진이 붙은 칸은 왼쪽 아래에 작은 네모 표시를 둔다. 메모 점(오른쪽 위)과
-      // 자리를 달리해 둘이 함께 있어도 구분된다.
-      // 두 장 이상이면 네모 오른쪽에 장수를 적는다 — 열어 보지 않아도 몇 장인지 안다.
-      const photos = cellPhotos(data);
-      if (photos.length > 0) {
-        const size = Math.max(4, Math.round(cell * 0.18));
-        const top = py + cell - size - 2;
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(px + 2, top, size, size);
-        ctx.strokeStyle = "#111827";
-        ctx.lineWidth = 1;
+      // 장비 색은 테두리로 보인다. 상태 채움색을 가리지 않는다.
+      if (kind.color) {
+        ctx.strokeStyle = kind.color;
+        ctx.lineWidth = 2;
+        ctx.setLineDash(dashArray(kind.lineStyle, 2));
+        ctx.strokeRect(px + 1, py + 1, cell - 2, cell - 2);
         ctx.setLineDash([]);
-        ctx.strokeRect(px + 2.5, top + 0.5, size - 1, size - 1);
+      }
 
-        if (photos.length > 1 && cell >= 18) {
-          const fontSize = Math.max(7, Math.round(cell * 0.24));
-          ctx.font = `${fontSize}px ui-sans-serif, system-ui, sans-serif`;
-          ctx.textAlign = "left";
-          ctx.textBaseline = "bottom";
-          ctx.fillStyle = "#111827";
-          ctx.fillText(`${photos.length}`, px + size + 4, py + cell - 2);
-        }
+      if (cell >= 12) {
+        const cy = data.label ? py + cell * 0.68 : py + cell / 2;
+        // 장비는 디스플레이 이름이 곧 칸에 찍히는 글자다.
+        // 장비 ID 가 함께 있으면 칸을 반으로 나눠 쓰므로 두 줄로 늘릴 자리가 없다.
+        const room = data.label ? cell * 0.4 : cell * 0.8;
+        drawCenteredText(ctx, kind.name, px + cell / 2, cy, cell - 5, cell * 0.36, textColor, room);
+      }
+    }
+
+    if (data.label && cell >= 12) {
+      const cy = data.kind ? py + cell * 0.28 : py + cell / 2;
+      const room = data.kind ? cell * 0.4 : cell * 0.8;
+      drawCenteredText(ctx, data.label, px + cell / 2, cy, cell - 5, cell * 0.34, textColor, room);
+    }
+
+    if (data.memo) {
+      ctx.fillStyle = "#111827";
+      ctx.beginPath();
+      ctx.arc(px + cell - 4, py + 4, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 사진이 붙은 칸은 왼쪽 아래에 작은 네모 표시를 둔다. 메모 점(오른쪽 위)과
+    // 자리를 달리해 둘이 함께 있어도 구분된다.
+    // 두 장 이상이면 네모 오른쪽에 장수를 적는다 — 열어 보지 않아도 몇 장인지 안다.
+    const photos = cellPhotos(data);
+    if (photos.length > 0) {
+      const size = Math.max(4, Math.round(cell * 0.18));
+      const top = py + cell - size - 2;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(px + 2, top, size, size);
+      ctx.strokeStyle = "#111827";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      ctx.strokeRect(px + 2.5, top + 0.5, size - 1, size - 1);
+
+      if (photos.length > 1 && cell >= 18) {
+        const fontSize = Math.max(7, Math.round(cell * 0.24));
+        ctx.font = `${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+        ctx.fillStyle = "#111827";
+        ctx.fillText(`${photos.length}`, px + size + 4, py + cell - 2);
       }
     }
   }
+}
 
-  if (visible.wiring) {
-    for (const [key, id] of Object.entries(doc.wiring)) {
-      const [x, y] = key.split(",").map(Number);
-      drawWire(ctx, doc.wiring, index, x, y, id, cell);
-    }
-  }
+/** 범례 띠 · 인쇄 경계선 · 미리보기 · 선택 표시 — 레이어 위에 얹는 것들. */
+function renderOverlays(
+  ctx: CanvasRenderingContext2D,
+  doc: LayoutDoc,
+  options: RenderOptions,
+  extent: { cols: number; rows: number },
+  band: number,
+) {
+  const { cell } = options;
 
   // 인쇄물에 함께 실릴 범례를 도면 아래에 미리 그려 둔다.
   if (options.printLegend && options.printLegend.items.length > 0 && band > 0) {
@@ -664,8 +721,6 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
     ctx.strokeRect(x * cell + 1, y * cell + 1, cell - 2, cell - 2);
     ctx.setLineDash([]);
   }
-
-  ctx.restore();
 }
 
 const SHEET_PADDING = 24;

@@ -291,7 +291,6 @@ export function GridEditor() {
         showGrid={state.showGrid}
         showRuler={state.showRuler}
         cell={state.cell}
-        savedAt={state.savedAt}
         onTitle={actions.setTitle}
         onTool={actions.setTool}
         onUndo={actions.undo}
@@ -333,6 +332,12 @@ export function GridEditor() {
           onSelect={actions.selectPalette}
           onToggleLayer={actions.toggleLayer}
           onFocusLayer={actions.setActiveLayer}
+          onToggleLayerLock={actions.toggleLayerLock}
+          onAddLayer={actions.addLayer}
+          onRenameLayer={actions.renameLayer}
+          onMoveLayer={actions.moveLayer}
+          onClearLayer={actions.clearLayer}
+          onDeleteLayer={actions.deleteLayer}
           onAddItem={actions.addPaletteItem}
           onUpdateItem={actions.updatePaletteItem}
           onDeleteItem={actions.deletePaletteItem}

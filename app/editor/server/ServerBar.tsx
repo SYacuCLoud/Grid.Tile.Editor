@@ -19,7 +19,9 @@ interface ServerBarProps {
  *
  * 서버에 닿지 못해도 줄은 남기고 이유와 `다시 연결` 을 보여 준다. 통째로 감추면
  * 사용자는 "메뉴가 사라졌다" 고만 느끼고 무엇을 해야 하는지 알 수 없다.
- * 그동안에도 브라우저 자동 저장과 JSON 내보내기로 편집은 그대로 이어진다.
+ *
+ * 도면을 저장하는 곳은 서버 한 곳이므로, 닿지 못하는 동안 한 작업은 `JSON 내보내기`
+ * 로 손에 들고 있어야 한다. 그 말을 여기서 분명히 해 둔다.
  */
 export function ServerBar({ state, actions }: ServerBarProps) {
   // 아직 확인 중이면 자리만 잡아 둔다. 곧바로 그렸다 지우면 화면이 튄다.
@@ -37,7 +39,7 @@ export function ServerBar({ state, actions }: ServerBarProps) {
           다시 연결
         </button>
         <span className="text-[11px] text-amber-700">
-          그동안에도 브라우저 자동 저장 · `JSON 내보내기` 는 그대로 됩니다.
+          연결되기 전까지 한 작업은 저장되지 않습니다. `JSON 내보내기` 로 남겨 두십시오.
         </span>
       </div>
     );

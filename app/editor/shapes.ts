@@ -1,4 +1,4 @@
-import { cellKey, isInside, type LayoutDoc, type Point } from "./doc";
+import { cellKey, isInside, type LayoutDoc, paintedCells, type Point } from "./doc";
 import type { LayerId } from "./palette";
 
 /** 브레젠험 직선 — 격자 셀 목록으로 반환. */
@@ -65,11 +65,13 @@ export function rectFillPoints(a: Point, b: Point): Point[] {
 
 function signature(doc: LayoutDoc, layer: LayerId, p: Point): string {
   const key = cellKey(p.x, p.y);
-  if (layer === "background") return doc.background[key] ?? "";
-  if (layer === "wiring") return doc.wiring[key] ?? "";
-  const cell = doc.equipment[key];
-  if (!cell) return "";
-  return `${cell.status ?? ""}|${cell.kind ?? ""}`;
+  if (layer === "equipment") {
+    const cell = doc.equipment[key];
+    if (!cell) return "";
+    return `${cell.status ?? ""}|${cell.kind ?? ""}`;
+  }
+  // 배경 · 배선 · 사용자 레이어는 모두 칸마다 팔레트 ID 하나다.
+  return paintedCells(doc, layer)[key] ?? "";
 }
 
 /** 같은 내용으로 이어진 영역을 4방향으로 채운다. */

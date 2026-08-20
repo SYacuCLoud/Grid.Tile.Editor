@@ -1,4 +1,13 @@
-import { type EquipmentCell, type LayoutDoc, type PageDoc, type ProjectDoc } from "./doc";
+import {
+  type CellHolder,
+  type EquipmentCell,
+  type LayoutDoc,
+  type PageDoc,
+  paintedCells,
+  type ProjectDoc,
+  withLayerCells,
+} from "./doc";
+import { isBuiltinLayerId } from "./layers";
 import {
   defaultPalette,
   defaultTiles,
@@ -39,11 +48,19 @@ export function usesPattern(role: PaletteRole): boolean {
   return role !== "kind" && role !== "wire";
 }
 
+/**
+ * 이름·색 검사.
+ *
+ * 같은 이름은 **같은 분류 안에서만** 막는다. `layerId` 를 주면 그 레이어까지
+ * 함께 본다 — 사용자 레이어의 항목은 배경·배선과 같은 분류(`tile` · `wire`)를
+ * 쓰므로, 레이어를 보지 않으면 서로 다른 레이어의 이름이 부딪친다.
+ */
 export function validateInput(
   palette: PaletteItem[],
   role: PaletteRole,
   input: PaletteInput,
   exceptId?: PaletteId,
+  layerId?: string,
 ): string | null {
   const name = input.name.trim();
   if (name.length === 0) return "이름을 입력해 달라.";
@@ -52,7 +69,12 @@ export function validateInput(
   if (!isHexColor(input.color)) return "색을 다시 골라 달라.";
 
   const clash = palette.some(
-    (item) => item.role === role && item.id !== exceptId && !item.retired && item.name.trim() === name,
+    (item) =>
+      item.role === role &&
+      (layerId === undefined || item.layer === layerId) &&
+      item.id !== exceptId &&
+      !item.retired &&
+      item.name.trim() === name,
   );
   if (clash) return `${roleMeta(role).name} 분류에 같은 디스플레이 이름이 이미 있다.`;
 
@@ -69,8 +91,10 @@ function slug(name: string): string {
 }
 
 /** 사용자 항목의 고유 ID. 기본 항목 ID 와 겹치지 않게 분류 접두어를 붙인다. */
-function nextId(palette: PaletteItem[], role: PaletteRole, name: string): PaletteId {
-  const base = `${role}-${slug(name)}`;
+function nextId(palette: PaletteItem[], role: PaletteRole, name: string, layerId: string): PaletteId {
+  // 기본 레이어는 예전처럼 분류 접두어를 쓴다(파일 모양이 달라지지 않는다).
+  // 사용자 레이어는 레이어 ID 를 접두어로 써서 서로 겹치지 않게 한다.
+  const base = `${isBuiltinLayerId(layerId) ? role : layerId}-${slug(name)}`;
   if (!palette.some((item) => item.id === base)) return base;
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;
@@ -83,13 +107,14 @@ export function addPaletteEntry(
   palette: PaletteItem[],
   role: PaletteRole,
   input: PaletteInput,
+  layerId?: string,
 ): { palette: PaletteItem[]; created: PaletteItem } {
-  const meta = roleMeta(role);
+  const layer = layerId ?? roleMeta(role).layer;
   const name = input.name.trim();
   const created: PaletteItem = {
-    id: nextId(palette, role, name),
+    id: nextId(palette, role, name, layer),
     name,
-    layer: meta.layer,
+    layer,
     role,
     color: isHexColor(input.color) ? input.color.toLowerCase() : NEW_ITEM_COLOR,
   };
@@ -139,23 +164,16 @@ export function updateItem(doc: LayoutDoc, id: PaletteId, input: PaletteInput): 
 }
 
 /** 칸을 담고 있는 것 — `PageDoc` 과 `LayoutDoc` 이 모두 만족한다. */
-export interface CellSource {
-  background: Record<string, PaletteId>;
-  equipment: Record<string, EquipmentCell>;
-  wiring: Record<string, PaletteId>;
-}
+export type CellSource = CellHolder;
 
 /** 여러 페이지를 합쳐 이 항목이 쓰인 칸 수를 센다. */
 export function usageCountIn(sources: CellSource[], item: PaletteItem): number {
   let total = 0;
 
   for (const source of sources) {
-    if (item.role === "tile") {
-      total += Object.values(source.background).filter((id) => id === item.id).length;
-      continue;
-    }
-    if (item.role === "wire") {
-      total += Object.values(source.wiring).filter((id) => id === item.id).length;
+    // 칸마다 팔레트 ID 하나인 레이어(배경 · 배선 · 사용자 레이어)는 한 길로 센다.
+    if (item.role === "tile" || item.role === "wire") {
+      total += Object.values(paintedCells(source, item.layer)).filter((id) => id === item.id).length;
       continue;
     }
     const field: "status" | "kind" = item.role === "status" ? "status" : "kind";
@@ -187,12 +205,11 @@ function isEmptyCell(cell: EquipmentCell): boolean {
 /** 이 항목이 쓰인 칸을 한 페이지에서 모두 비운다. */
 function clearUsageIn<T extends CellSource>(source: T, item: PaletteItem): T {
   if (item.role === "tile" || item.role === "wire") {
-    const map = item.role === "tile" ? source.background : source.wiring;
     const kept: Record<string, PaletteId> = {};
-    for (const [key, id] of Object.entries(map)) {
+    for (const [key, id] of Object.entries(paintedCells(source, item.layer))) {
       if (id !== item.id) kept[key] = id;
     }
-    return item.role === "tile" ? { ...source, background: kept } : { ...source, wiring: kept };
+    return withLayerCells(source, item.layer, kept);
   }
 
   const field: "status" | "kind" = item.role === "status" ? "status" : "kind";
@@ -298,11 +315,15 @@ export function ensurePalette(raw: unknown): PaletteItem[] {
     if (!candidate.role || !known.has(candidate.role)) continue;
     if (seen.has(candidate.id)) continue;
 
-    const meta = roleMeta(candidate.role);
+    // 레이어는 파일에 적힌 값을 그대로 살린다. 분류에서 되짚으면 사용자
+    // 레이어의 항목이 모두 배경·배선으로 끌려가 도면이 뒤섞인다.
     const item: PaletteItem = {
       id: candidate.id,
       name: candidate.name.trim(),
-      layer: meta.layer,
+      layer:
+        typeof candidate.layer === "string" && candidate.layer.length > 0
+          ? candidate.layer
+          : roleMeta(candidate.role).layer,
       role: candidate.role,
     };
     if (typeof candidate.color === "string" && isHexColor(candidate.color)) item.color = candidate.color;

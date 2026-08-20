@@ -1,18 +1,13 @@
 import type { FillPattern, LineStyle } from "./pattern";
 
-export type LayerId = "background" | "equipment" | "wiring";
-
-export interface LayerMeta {
-  id: LayerId;
-  name: string;
-  hint: string;
-}
-
-export const LAYERS: LayerMeta[] = [
-  { id: "background", name: "배경", hint: "벽 · 통로 · 문" },
-  { id: "equipment", name: "설비", hint: "상태색 · 장비" },
-  { id: "wiring", name: "배선", hint: "배선 경로" },
-];
+/**
+ * 레이어 ID.
+ *
+ * 예전에는 `background` · `equipment` · `wiring` 셋뿐인 유니온이었지만, 사용자가
+ * 레이어를 더 만들 수 있게 되면서 자유 문자열이 되었다. 어느 레이어가 있고
+ * 무엇을 어떤 순서로 그리는지는 `layers.ts` 가 안다.
+ */
+export type LayerId = string;
 
 /**
  * 팔레트 항목 ID. 예전 판에서는 고정 문자열 조합이었지만, 사용자가 항목을
@@ -175,6 +170,16 @@ export function itemsOfRole(palette: PaletteItem[], role: PaletteRole): PaletteI
 
 export function itemsOfLayer(palette: PaletteItem[], layer: LayerId): PaletteItem[] {
   return palette.filter((item) => item.layer === layer && !item.retired);
+}
+
+/**
+ * 팔레트 패널의 분류 한 칸에 들어갈 항목.
+ *
+ * 분류만으로 거르면 안 된다 — 사용자 레이어의 항목도 그리는 방식이 같아
+ * `tile` · `wire` 분류를 쓰므로, 레이어까지 함께 봐야 배경 · 배선 항목과 섞이지 않는다.
+ */
+export function itemsOfSection(palette: PaletteItem[], layer: LayerId, role: PaletteRole): PaletteItem[] {
+  return palette.filter((item) => item.layer === layer && item.role === role && !item.retired);
 }
 
 /** 항목 이름 최대 길이. 칸에 찍히므로 너무 길면 읽히지 않는다. */

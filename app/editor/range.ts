@@ -1,5 +1,13 @@
-import { cellKey, type EquipmentCell, isInside, type LayoutDoc, type Point } from "./doc";
-import { type TileId, type WireId } from "./palette";
+import {
+  cellKey,
+  type EquipmentCell,
+  isInside,
+  type LayerCells,
+  type LayoutDoc,
+  type Point,
+  usedLayerIds,
+} from "./doc";
+import { type PaletteId, type TileId, type WireId } from "./palette";
 
 export interface CellRange {
   minX: number;
@@ -16,6 +24,17 @@ export interface ClipboardCell {
   background?: TileId;
   equipment?: EquipmentCell;
   wiring?: WireId;
+  /** 사용자 레이어의 칸. 레이어 ID → 팔레트 ID. */
+  layers?: Record<string, PaletteId>;
+}
+
+/** 붙여넣기·잘라내기가 건드리지 않을 레이어. 잠근 레이어를 여기로 넘긴다. */
+export interface LayerGuard {
+  locked?: string[];
+}
+
+function isLocked(guard: LayerGuard | undefined, layerId: string): boolean {
+  return guard?.locked ? guard.locked.includes(layerId) : false;
 }
 
 export interface ClipboardData {
@@ -65,6 +84,7 @@ export function rangeContains(range: CellRange, p: Point): boolean {
 /** 선택 범위의 배경·설비·배선 레이어 및 장비 ID·메모 메타를 모두 복사하여 상대 좌표 클립보드 데이터로 추출한다. */
 export function copyRange(doc: LayoutDoc, range: CellRange): ClipboardData {
   const cells: ClipboardCell[] = [];
+  const customIds = usedLayerIds(doc);
 
   for (let x = range.minX; x <= range.maxX; x += 1) {
     for (let y = range.minY; y <= range.maxY; y += 1) {
@@ -73,13 +93,21 @@ export function copyRange(doc: LayoutDoc, range: CellRange): ClipboardData {
       const eq = doc.equipment[key];
       const wr = doc.wiring[key];
 
-      if (bg || eq || wr) {
+      const layers: Record<string, PaletteId> = {};
+      for (const id of customIds) {
+        const value = doc.layerCells?.[id]?.[key];
+        if (value) layers[id] = value;
+      }
+      const hasLayers = Object.keys(layers).length > 0;
+
+      if (bg || eq || wr || hasLayers) {
         cells.push({
           relX: x - range.minX,
           relY: y - range.minY,
           background: bg,
           equipment: eq ? { ...eq } : undefined,
           wiring: wr,
+          ...(hasLayers ? { layers } : {}),
         });
       }
     }
@@ -99,23 +127,33 @@ export function copyRange(doc: LayoutDoc, range: CellRange): ClipboardData {
  * 되돌리기 이력에 빈 단계가 쌓이지 않게 하려는 것이다. 클립보드 데이터는
  * 비어 있더라도 기존과 같이 그대로 돌려준다.
  */
-export function cutRange(doc: LayoutDoc, range: CellRange): { nextDoc: LayoutDoc; data: ClipboardData } {
+export function cutRange(
+  doc: LayoutDoc,
+  range: CellRange,
+  guard?: LayerGuard,
+): { nextDoc: LayoutDoc; data: ClipboardData } {
   const data = copyRange(doc, range);
 
-  // copyRange 는 세 레이어 중 하나라도 내용이 있는 칸만 담는다.
+  // copyRange 는 레이어 중 하나라도 내용이 있는 칸만 담는다.
   // 담긴 칸이 없다면 범위 안에 지울 것이 없다.
   if (data.cells.length === 0) return { nextDoc: doc, data };
 
+  // 잠긴 레이어는 베끼기만 하고 지우지 않는다. 잠금은 "내용을 잃지 않겠다" 는 뜻이다.
   const background = { ...doc.background };
   const equipment = { ...doc.equipment };
   const wiring = { ...doc.wiring };
+  const layerCells: LayerCells = {};
+  for (const [id, cells] of Object.entries(doc.layerCells ?? {})) layerCells[id] = { ...cells };
 
   for (let x = range.minX; x <= range.maxX; x += 1) {
     for (let y = range.minY; y <= range.maxY; y += 1) {
       const key = cellKey(x, y);
-      delete background[key];
-      delete equipment[key];
-      delete wiring[key];
+      if (!isLocked(guard, "background")) delete background[key];
+      if (!isLocked(guard, "equipment")) delete equipment[key];
+      if (!isLocked(guard, "wiring")) delete wiring[key];
+      for (const id of Object.keys(layerCells)) {
+        if (!isLocked(guard, id)) delete layerCells[id][key];
+      }
     }
   }
 
@@ -125,9 +163,19 @@ export function cutRange(doc: LayoutDoc, range: CellRange): { nextDoc: LayoutDoc
       background,
       equipment,
       wiring,
+      ...normalizeLayerCells(layerCells),
     },
     data,
   };
+}
+
+/** 빈 레이어 맵은 자리를 아예 비운다. 파일 모양이 예전과 같아진다. */
+function normalizeLayerCells(layerCells: LayerCells): { layerCells?: LayerCells } {
+  const out: LayerCells = {};
+  for (const [id, cells] of Object.entries(layerCells)) {
+    if (Object.keys(cells).length > 0) out[id] = cells;
+  }
+  return Object.keys(out).length > 0 ? { layerCells: out } : {};
 }
 
 function sameEquipment(a: EquipmentCell | undefined, b: EquipmentCell | undefined): boolean {
@@ -149,10 +197,19 @@ export function pasteClipboard(
   doc: LayoutDoc,
   data: ClipboardData,
   origin: Point,
+  guard?: LayerGuard,
 ): { nextDoc: LayoutDoc; pastedRange: CellRange } {
   const background = { ...doc.background };
   const equipment = { ...doc.equipment };
   const wiring = { ...doc.wiring };
+
+  // 클립보드에 담긴 레이어와 지금 문서에 있는 레이어를 합쳐 훑는다. 어느 한쪽에만
+  // 있는 레이어도 블록 교체 대상이다(있던 칸은 지워지고, 없던 칸은 새로 놓인다).
+  const layerCells: LayerCells = {};
+  for (const [id, cells] of Object.entries(doc.layerCells ?? {})) layerCells[id] = { ...cells };
+  for (const cell of data.cells) {
+    for (const id of Object.keys(cell.layers ?? {})) layerCells[id] = layerCells[id] ?? {};
+  }
 
   // 붙여넣기 원점이 문서 범위를 조절
   const ox = Math.max(0, Math.min(doc.cols - 1, origin.x));
@@ -174,28 +231,46 @@ export function pasteClipboard(
       const key = cellKey(tx, ty);
       const cell = byRel.get(cellKey(relX, relY));
 
-      if (cell?.background) {
-        if (background[key] !== cell.background) changed = true;
-        background[key] = cell.background;
-      } else if (key in background) {
-        delete background[key];
-        changed = true;
+      if (!isLocked(guard, "background")) {
+        if (cell?.background) {
+          if (background[key] !== cell.background) changed = true;
+          background[key] = cell.background;
+        } else if (key in background) {
+          delete background[key];
+          changed = true;
+        }
       }
 
-      if (cell?.equipment) {
-        if (!sameEquipment(equipment[key], cell.equipment)) changed = true;
-        equipment[key] = { ...cell.equipment };
-      } else if (key in equipment) {
-        delete equipment[key];
-        changed = true;
+      if (!isLocked(guard, "equipment")) {
+        if (cell?.equipment) {
+          if (!sameEquipment(equipment[key], cell.equipment)) changed = true;
+          equipment[key] = { ...cell.equipment };
+        } else if (key in equipment) {
+          delete equipment[key];
+          changed = true;
+        }
       }
 
-      if (cell?.wiring) {
-        if (wiring[key] !== cell.wiring) changed = true;
-        wiring[key] = cell.wiring;
-      } else if (key in wiring) {
-        delete wiring[key];
-        changed = true;
+      if (!isLocked(guard, "wiring")) {
+        if (cell?.wiring) {
+          if (wiring[key] !== cell.wiring) changed = true;
+          wiring[key] = cell.wiring;
+        } else if (key in wiring) {
+          delete wiring[key];
+          changed = true;
+        }
+      }
+
+      for (const [id, cells] of Object.entries(layerCells)) {
+        if (isLocked(guard, id)) continue;
+        const value = cell?.layers?.[id];
+        if (value) {
+          if (cells[key] !== value) changed = true;
+          cells[key] = value;
+        } else if (key in cells) {
+          delete cells[key];
+          changed = true;
+        }
       }
     }
   }
@@ -213,6 +288,7 @@ export function pasteClipboard(
           background,
           equipment,
           wiring,
+          ...normalizeLayerCells(layerCells),
         }
       : doc,
     pastedRange,

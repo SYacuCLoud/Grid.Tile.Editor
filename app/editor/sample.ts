@@ -156,6 +156,7 @@ export function createSampleProject(): ProjectDoc {
     title: "격자형 배치 프로젝트",
     activePageId: page1.id,
     pages: [page1, page2],
+    layers: sampleDoc.layers,
     palette: sampleDoc.palette,
   };
 }

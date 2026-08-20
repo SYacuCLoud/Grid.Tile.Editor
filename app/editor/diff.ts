@@ -6,11 +6,12 @@
  * 훑으면 된다.
  */
 
-import { cellPhotos, type EquipmentCell, type PageDoc, type ProjectDoc } from "./doc";
+import { cellPhotos, type CellHolder, type EquipmentCell, type PageDoc, type ProjectDoc, usedLayerIds } from "./doc";
 import type { PaletteItem } from "./palette";
 
 export type ChangeKind = "added" | "removed" | "changed";
-export type LayerName = "background" | "equipment" | "wiring";
+/** 레이어 ID. 기본 3종과 사용자 레이어 ID 가 함께 온다. */
+export type LayerName = string;
 
 export interface CellChange {
   key: string;
@@ -118,15 +119,20 @@ function paletteText(item: PaletteItem | undefined): string | null {
 
 function diffPage(before: PageDoc | undefined, after: PageDoc | undefined): PageDiff {
   const page = after ?? before;
+  const asId = (value: unknown) => (typeof value === "string" ? value : null);
+
+  // 사용자 레이어는 어느 쪽에만 있을 수도 있다(레이어를 새로 만들었거나 지웠거나).
+  const empty: CellHolder = { background: {}, equipment: {}, wiring: {} };
+  const customIds = new Set([...usedLayerIds(before ?? empty), ...usedLayerIds(after ?? empty)]);
+
   const changes = [
-    ...diffLayer("background", before?.background ?? {}, after?.background ?? {}, (value) =>
-      typeof value === "string" ? value : null,
-    ),
+    ...diffLayer("background", before?.background ?? {}, after?.background ?? {}, asId),
     ...diffLayer("equipment", before?.equipment ?? {}, after?.equipment ?? {}, (value) =>
       equipmentText(value as EquipmentCell | undefined),
     ),
-    ...diffLayer("wiring", before?.wiring ?? {}, after?.wiring ?? {}, (value) =>
-      typeof value === "string" ? value : null,
+    ...diffLayer("wiring", before?.wiring ?? {}, after?.wiring ?? {}, asId),
+    ...[...customIds].flatMap((id) =>
+      diffLayer(id, before?.layerCells?.[id] ?? {}, after?.layerCells?.[id] ?? {}, asId),
     ),
   ];
 

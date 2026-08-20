@@ -79,6 +79,24 @@ export function photoBytes(dataUrl: string): number {
   return Math.round((base64.length * 3) / 4);
 }
 
+/**
+ * 확대 보기에서 한 장 넘긴 뒤의 순번.
+ *
+ * 끝에서 끝으로 돈다 — 마지막 장에서 `▶` 를 눌렀을 때 아무 일도 일어나지 않으면
+ * 단추가 죽은 줄로 보인다. 장수가 없으면 0 을 준다(부르는 쪽이 빈 목록을
+ * 따로 다루지 않아도 되게).
+ */
+export function stepPhotoIndex(index: number, total: number, delta: number): number {
+  if (total <= 0) return 0;
+  // 두 번 나머지를 취해 음수와 -0 을 한꺼번에 없앤다.
+  return (((Math.trunc(index) + Math.trunc(delta)) % total) + total) % total;
+}
+
+/** 사람이 읽는 순번. `2 / 5` */
+export function photoCounter(index: number, total: number): string {
+  return `${Math.min(total, Math.max(0, index) + 1)} / ${total}`;
+}
+
 /** 사진 여러 장을 합친 대략 바이트 수. */
 export function photosBytes(photos: string[]): number {
   return photos.reduce((sum, photo) => sum + photoBytes(photo), 0);

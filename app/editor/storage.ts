@@ -1,8 +1,19 @@
-import { type EquipmentCell, DOC_VERSION, type PageDoc, type ProjectDoc } from "./doc";
+import { type EquipmentCell, DOC_VERSION, type LayerCells, type PageDoc, type ProjectDoc } from "./doc";
+import { type LayerDef, sanitizeLayers } from "./layers";
 import { ensurePalette } from "./paletteOps";
 import { type PagePaper, sanitizePaper } from "./paper";
 import { sanitizePhotos } from "./photo";
 
+/**
+ * 예전 판이 도면을 자동 저장해 두던 브라우저 열쇠.
+ *
+ * 지금은 도면을 브라우저에 저장하지 않는다 — 저장하는 곳은 서버 한 곳이다.
+ * 두 곳에 두면 어느 쪽이 최신인지 아무도 모른다: 이 브라우저에서 고친 것이
+ * 서버 것보다 새롭고, 옆자리 사람이 서버에 올린 것은 또 그보다 새롭다.
+ * 그래서 첫 화면에 무엇을 띄울지부터 답이 없어진다.
+ *
+ * 열쇠 이름만 남겨 두는 것은 `전체 초기화` 로 옛 데이터를 지워 주기 위해서다.
+ */
 export const STORAGE_KEY = "rfid-grid-editor:project:v2";
 export const LEGACY_STORAGE_KEY = "rfid-grid-editor:doc:v1";
 
@@ -34,9 +45,36 @@ function sanitizeEquipment(raw: unknown): Record<string, EquipmentCell> {
   return out;
 }
 
+/**
+ * 사용자 레이어의 칸을 다듬는다.
+ *
+ * 목록에 없는 레이어의 칸은 버린다. 레이어를 지우고 저장한 뒤 그 칸만 남으면
+ * 화면에 그릴 자리도 없이 파일만 무거워진다. 값은 팔레트 ID 문자열이어야 한다 —
+ * 없는 ID 는 렌더러가 회색 대체 항목으로 그리므로 여기서 걸러 내지 않는다.
+ */
+function sanitizeLayerCells(raw: unknown, layers: LayerDef[]): LayerCells | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const known = new Set(layers.filter((layer) => !layer.builtin).map((layer) => layer.id));
+  const out: LayerCells = {};
+
+  for (const [layerId, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!known.has(layerId) || !value || typeof value !== "object") continue;
+    const cells: Record<string, string> = {};
+    for (const [key, id] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof id === "string" && id.length > 0) cells[key] = id;
+    }
+    if (Object.keys(cells).length > 0) out[layerId] = cells;
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function sanitizeProject(input: unknown): ProjectDoc | null {
   if (!input || typeof input !== "object") return null;
   const raw = input as Record<string, unknown>;
+
+  // 레이어 목록이 없는 이전 문서는 기본 3종을 받는다.
+  const layers = sanitizeLayers(raw.layers);
 
   // 다중 페이지 형식인가? (pages 배열 존재)
   if (Array.isArray(raw.pages) && raw.pages.length > 0) {
@@ -50,6 +88,9 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
         background: (rawPage.background ?? {}) as PageDoc["background"],
         equipment: sanitizeEquipment(rawPage.equipment),
         wiring: (rawPage.wiring ?? {}) as PageDoc["wiring"],
+        ...(sanitizeLayerCells(rawPage.layerCells, layers)
+          ? { layerCells: sanitizeLayerCells(rawPage.layerCells, layers) as LayerCells }
+          : {}),
         ...(sanitizePaper(rawPage.paper) ? { paper: sanitizePaper(rawPage.paper) as PagePaper } : {}),
       };
     });
@@ -64,6 +105,7 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
       title: typeof raw.title === "string" ? raw.title : "격자형 배치 프로젝트",
       activePageId,
       pages,
+      layers,
       palette: ensurePalette(raw.palette),
     };
   }
@@ -85,6 +127,7 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
       title: typeof raw.title === "string" ? raw.title : "격자형 배치 프로젝트",
       activePageId: legacyPage.id,
       pages: [legacyPage],
+      layers,
       palette: ensurePalette(raw.palette),
     };
   }
@@ -92,43 +135,7 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
   return null;
 }
 
-export interface LoadedProject {
-  project: ProjectDoc;
-  /** 이전 v1 단일 문서 키에서 읽어 이관한 결과인가. */
-  fromLegacy: boolean;
-}
-
-export function loadLocal(): LoadedProject | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const text = window.localStorage.getItem(STORAGE_KEY);
-    if (text) {
-      const project = sanitizeProject(JSON.parse(text));
-      if (project) return { project, fromLegacy: false };
-    }
-
-    // 이전 v1 단일 문서 자동 마이그레이션 시도
-    const legacyText = window.localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (legacyText) {
-      const project = sanitizeProject(JSON.parse(legacyText));
-      if (project) return { project, fromLegacy: true };
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-export function saveLocal(project: ProjectDoc) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
-  } catch {
-    // 저장 용량 초과 등은 편집을 막지 않는다.
-  }
-}
-
+/** 예전 판이 브라우저에 남겨 둔 도면을 지운다. */
 export function clearLocal() {
   if (typeof window === "undefined") return;
   try {

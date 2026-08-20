@@ -6,13 +6,14 @@ import {
   activePage,
   addPageToProject,
   cellKey,
+  clearLayerOnPage,
   createPage,
   deletePageFromProject,
+  dropLayerFromPage,
   eraseCellsOnPage,
   type LayoutDoc,
   paintCellsOnPage,
   parseCellKey,
-
   type PageDoc,
   type Point,
   type ProjectDoc,
@@ -22,6 +23,21 @@ import {
   updateActivePage,
   updateEquipmentInfoOnPage,
 } from "./doc";
+import {
+  addLayer as addLayerDef,
+  canEditLayer,
+  deleteLayer as deleteLayerDef,
+  type LayerDef,
+  type LayerInput,
+  layerById,
+  lockedLayerIds,
+  MAX_LAYERS,
+  moveLayer as moveLayerDef,
+  renameLayer as renameLayerDef,
+  toggleLayerFlag,
+  validateLayerName,
+  visibleMap,
+} from "./layers";
 import {
   itemsOfRole,
   type LayerId,
@@ -49,7 +65,7 @@ import {
 import type { PagePaper } from "./paper";
 import { createSampleProject } from "./sample";
 import { floodFillPoints, linePoints, rectFillPoints, rectOutlinePoints } from "./shapes";
-import { clearLocal, loadLocal, saveLocal } from "./storage";
+import { clearLocal } from "./storage";
 
 export type ToolId = "brush" | "eraser" | "line" | "rect" | "rectFill" | "fill" | "pick";
 
@@ -87,6 +103,10 @@ export interface EditorState {
   /** 고른 팔레트 항목. 항목이 지워졌으면 null. */
   activeItem: PaletteItem | null;
   activeLayer: LayerId;
+  /** 활성 레이어 정의. 지워진 레이어를 가리키고 있으면 null. */
+  activeLayerDef: LayerDef | null;
+  /** 활성 레이어가 잠겨 있어 지금은 그릴 수 없는가. */
+  layerLocked: boolean;
   visible: Record<LayerId, boolean>;
   showGrid: boolean;
   /** 칸 번호 눈금자를 도면 위·왼쪽에 붙일지. */
@@ -101,7 +121,6 @@ export interface EditorState {
   preview: Point[];
   canUndo: boolean;
   canRedo: boolean;
-  savedAt: string | null;
 }
 
 /**
@@ -112,6 +131,25 @@ function keepViewedPage(restored: ProjectDoc, viewedPageId: string): ProjectDoc 
   if (!restored.pages.some((page) => page.id === viewedPageId)) return restored;
   if (restored.activePageId === viewedPageId) return restored;
   return { ...restored, activePageId: viewedPageId };
+}
+
+/**
+ * 잘라내기·붙여넣기가 돌려준 칸을 페이지에 옮겨 담는다.
+ *
+ * 이 둘은 렌더러용 평면 뷰(`LayoutDoc`)에서 돌아오므로, 페이지가 들고 있는
+ * 자리(기본 3종 + 사용자 레이어)로 한 번에 옮겨야 한다. 한 자리라도 빠뜨리면
+ * 그 레이어만 조용히 예전 내용으로 남는다.
+ */
+function writeCells(page: PageDoc, next: LayoutDoc): PageDoc {
+  const merged: PageDoc = {
+    ...page,
+    background: next.background,
+    equipment: next.equipment,
+    wiring: next.wiring,
+  };
+  if (next.layerCells && Object.keys(next.layerCells).length > 0) merged.layerCells = next.layerCells;
+  else delete merged.layerCells;
+  return merged;
 }
 
 /** 고른 항목이 사라졌을 때 대신 고를 항목. */
@@ -130,11 +168,6 @@ export function useEditor() {
   const [tool, setTool] = useState<ToolId>("brush");
   const [activeId, setActiveId] = useState<PaletteId>("installed");
   const [activeLayer, setActiveLayer] = useState<LayerId>("equipment");
-  const [visible, setVisible] = useState<Record<LayerId, boolean>>({
-    background: true,
-    equipment: true,
-    wiring: true,
-  });
   const [showGrid, setShowGrid] = useState(true);
   const [showRuler, setShowRuler] = useState(true);
   const [cell, setCell] = useState(22);
@@ -144,17 +177,19 @@ export function useEditor() {
   const [clipboard, setClipboard] = useState<ClipboardData | null>(null);
   const [hover, setHover] = useState<Point | null>(null);
   const [preview, setPreview] = useState<Point[]>([]);
-  // 서버 렌더에 시각을 넣으면 hydration 때 값이 달라진다. 실제로 저장한 뒤에만 채운다.
-  const [savedAt, setSavedAt] = useState<string | null>(null);
 
   const project = history.project;
   const activePageDoc = useMemo(() => activePage(project), [project]);
   const doc = useMemo(() => activeLayoutDoc(project), [project]);
 
+  // 표시 여부는 레이어 정의 한 곳에만 적힌다. 화면 상태로 따로 들고 있으면
+  // 문서를 갈아 끼울 때(불러오기 · 되돌리기) 반드시 갈라진다.
+  const visible = useMemo(() => visibleMap(project.layers), [project.layers]);
+  const activeLayerDef = useMemo(() => layerById(project.layers, activeLayer) ?? null, [activeLayer, project.layers]);
+  const layerLocked = activeLayerDef?.locked === true;
+
   const dragStart = useRef<Point | null>(null);
   const dragging = useRef(false);
-  /** 마운트 후 localStorage 를 읽었는지. 첫 렌더 내용을 저장소에 덮어쓰지 않으려는 표시. */
-  const restored = useRef(false);
 
   const activeItem = useMemo(
     () => project.palette.find((item) => item.id === activeId) ?? null,
@@ -183,29 +218,9 @@ export function useEditor() {
     });
   }, []);
 
-  // 저장된 작업 복원 — 마운트 후 1회. 이전 v1 단일 문서 키도 함께 살펴본다.
-  useEffect(() => {
-    if (restored.current) return;
-    restored.current = true;
-    const loaded = loadLocal();
-    if (!loaded) return;
-
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 외부 저장소에서 1회 동기화
-    setHistory({ past: [], project: loaded.project, future: [] });
-
-    // 이전 키에서 이관했다면 새 키에 바로 한 번 남긴다. 다음 편집까지 기다리지 않는다.
-    if (loaded.fromLegacy) saveLocal(loaded.project);
-  }, []);
-
-  // 자동 저장 — 드래그 중에는 프로젝트가 매 이동마다 바뀌므로 400ms 모아서 한 번만 쓴다.
-  useEffect(() => {
-    if (!restored.current) return;
-    const timer = window.setTimeout(() => {
-      saveLocal(project);
-      setSavedAt(new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }));
-    }, 400);
-    return () => window.clearTimeout(timer);
-  }, [project]);
+  // 도면을 브라우저에 저장하지도, 브라우저에서 되읽지도 않는다.
+  // 저장하는 곳은 서버 한 곳이다(`서버 저장`). 첫 화면은 예시 도면으로 시작하고,
+  // 서버에 도면이 있으면 가장 최근 것을 자동으로 열어 준다(`useServerProjects`).
 
   const undo = useCallback(() => {
     setHistory((current) => {
@@ -261,8 +276,14 @@ export function useEditor() {
   const writePointsOnPage = useCallback(
     (currentProject: ProjectDoc, points: Point[]): ProjectDoc => {
       return updateActivePage(currentProject, (page) => {
-        if (tool === "eraser") return eraseCellsOnPage(page, activeLayer, points);
+        // 잠긴 레이어는 아무 도구도 건드리지 못한다. 지우개는 활성 레이어를,
+        // 칠하기는 고른 항목이 놓인 레이어를 대상으로 삼는다.
+        if (tool === "eraser") {
+          if (!canEditLayer(currentProject.layers, activeLayer)) return page;
+          return eraseCellsOnPage(page, activeLayer, points);
+        }
         if (!activeItem) return page;
+        if (!canEditLayer(currentProject.layers, activeItem.layer)) return page;
         return paintCellsOnPage(page, activeItem, points);
       });
     },
@@ -290,9 +311,16 @@ export function useEditor() {
         applyEdit((current) => writePointsOnPage(current, [p]));
       } else if (tool === "fill") {
         applyEdit((current) => updateActivePage(current, (page) => {
-          const pageView: LayoutDoc = { ...doc, background: page.background, equipment: page.equipment, wiring: page.wiring };
+          const pageView: LayoutDoc = {
+            ...doc,
+            background: page.background,
+            equipment: page.equipment,
+            wiring: page.wiring,
+            layerCells: page.layerCells,
+          };
           const fillPts = floodFillPoints(pageView, activeLayer, p);
           if (!activeItem) return page;
+          if (!canEditLayer(current.layers, activeItem.layer)) return page;
           return paintCellsOnPage(page, activeItem, fillPts);
         }));
       } else {
@@ -361,15 +389,10 @@ export function useEditor() {
 
   const cut = useCallback(() => {
     if (!selectionRange) return;
-    const { nextDoc, data } = cutRange(doc, selectionRange);
-    applyEdit((current) => updateActivePage(current, (page) => ({
-      ...page,
-      background: nextDoc.background,
-      equipment: nextDoc.equipment,
-      wiring: nextDoc.wiring,
-    })));
+    const { nextDoc, data } = cutRange(doc, selectionRange, { locked: lockedLayerIds(project.layers) });
+    applyEdit((current) => updateActivePage(current, (page) => writeCells(page, nextDoc)));
     setClipboard(data);
-  }, [applyEdit, doc, selectionRange]);
+  }, [applyEdit, doc, project.layers, selectionRange]);
 
   const paste = useCallback(() => {
     if (!clipboard) return;
@@ -379,17 +402,14 @@ export function useEditor() {
         ? parseCellKey(selectedKey)
         : { x: 0, y: 0 };
 
-    const { nextDoc, pastedRange } = pasteClipboard(doc, clipboard, origin);
-    applyEdit((current) => updateActivePage(current, (page) => ({
-      ...page,
-      background: nextDoc.background,
-      equipment: nextDoc.equipment,
-      wiring: nextDoc.wiring,
-    })));
+    const { nextDoc, pastedRange } = pasteClipboard(doc, clipboard, origin, {
+      locked: lockedLayerIds(project.layers),
+    });
+    applyEdit((current) => updateActivePage(current, (page) => writeCells(page, nextDoc)));
     setSelectionRange(pastedRange);
     setSelectedKey(cellKey(pastedRange.minX, pastedRange.minY));
     setTool("pick");
-  }, [applyEdit, clipboard, doc, selectedKey, selectionRange]);
+  }, [applyEdit, clipboard, doc, project.layers, selectedKey, selectionRange]);
 
   /** 칸 우클릭 — 그 자리에서 메모를 고치게 한다. 도구는 바꾸지 않는다. */
   const openNote = useCallback((p: Point) => {
@@ -459,13 +479,14 @@ export function useEditor() {
       applyEdit(() => next);
       setSelectedKey(null);
       setSelectionRange(null);
+      if (!layerById(next.layers, activeLayer)) setActiveLayer("equipment");
       if (!next.palette.some((item) => item.id === activeId && !item.retired)) {
         const item = fallbackItem(next.palette, "status");
         setActiveId(item ? item.id : "");
         if (item) setActiveLayer(item.layer);
       }
     },
-    [activeId, applyEdit],
+    [activeId, activeLayer, applyEdit],
   );
 
   const resetAll = useCallback(() => {
@@ -474,12 +495,11 @@ export function useEditor() {
       ...current,
       pages: current.pages.map((page) => createPage(page.id, page.name, page.cols, page.rows)),
     }));
-    // 이전 v1 키까지 지워 옛 데이터가 되살아나지 않게 한다.
-    // 비워진 프로젝트 자체는 곧이어 자동 저장이 새 키에 기록한다.
+    // 예전 판이 이 브라우저에 남겨 둔 도면도 함께 지운다. 지금은 브라우저에
+            // 저장하지 않으므로, 남아 있어도 되살아날 길은 없지만 자리만 차지한다.
     clearLocal();
     setSelectedKey(null);
     setSelectionRange(null);
-    setSavedAt(null);
   }, [applyEdit]);
 
   const loadSample = useCallback(() => {
@@ -530,11 +550,11 @@ export function useEditor() {
 
   /** 팔레트 항목 추가 */
   const addPaletteItem = useCallback(
-    (role: PaletteRole, input: PaletteInput): string | null => {
-      const error = validateInput(project.palette, role, input);
+    (role: PaletteRole, input: PaletteInput, layerId?: string): string | null => {
+      const error = validateInput(project.palette, role, input, undefined, layerId);
       if (error) return error;
 
-      const { palette, created } = addPaletteEntry(project.palette, role, input);
+      const { palette, created } = addPaletteEntry(project.palette, role, input, layerId);
       applyEdit((current) => ({ ...current, palette }));
       setActiveId(created.id);
       setActiveLayer(created.layer);
@@ -549,7 +569,7 @@ export function useEditor() {
       const item = project.palette.find((entry) => entry.id === id);
       if (!item) return "이미 지워진 항목이다.";
 
-      const error = validateInput(project.palette, item.role, input, id);
+      const error = validateInput(project.palette, item.role, input, id, item.layer);
       if (error) return error;
 
       applyEdit((current) => ({ ...current, palette: updatePaletteEntry(current.palette, id, input) }));
@@ -576,9 +596,98 @@ export function useEditor() {
     [activeId, applyEdit, project],
   );
 
-  const toggleLayer = useCallback((layer: LayerId) => {
-    setVisible((current) => ({ ...current, [layer]: !current[layer] }));
-  }, []);
+  /**
+   * 표시 · 잠금은 도면 내용을 바꾸지 않는다. 되돌리기 지점을 만들지 않는다 —
+   * 눈을 껐다 켠 것까지 Ctrl+Z 로 되짚어야 하면 되돌리기가 쓸모 없어진다.
+   */
+  const toggleLayer = useCallback(
+    (layer: LayerId) => {
+      applyLive((current) => ({ ...current, layers: toggleLayerFlag(current.layers, layer, "hidden") }));
+    },
+    [applyLive],
+  );
+
+  const toggleLayerLock = useCallback(
+    (layer: LayerId) => {
+      applyLive((current) => ({ ...current, layers: toggleLayerFlag(current.layers, layer, "locked") }));
+    },
+    [applyLive],
+  );
+
+  /** 레이어 추가. 문제가 있으면 사용자에게 보일 한 줄을 돌려준다. */
+  const addLayer = useCallback(
+    (input: LayerInput): string | null => {
+      if (project.layers.length >= MAX_LAYERS) return `레이어는 ${MAX_LAYERS}개까지 만들 수 있다.`;
+      const error = validateLayerName(project.layers, input.name);
+      if (error) return error;
+
+      const { layers, created } = addLayerDef(project.layers, input);
+      applyEdit((current) => ({ ...current, layers }));
+      setActiveLayer(created.id);
+      return null;
+    },
+    [applyEdit, project.layers],
+  );
+
+  const renameLayer = useCallback(
+    (layer: LayerId, name: string): string | null => {
+      const error = validateLayerName(project.layers, name, layer);
+      if (error) return error;
+      applyEdit((current) => ({ ...current, layers: renameLayerDef(current.layers, layer, name) }));
+      return null;
+    },
+    [applyEdit, project.layers],
+  );
+
+  /** 그리는 순서를 한 칸 옮긴다. `delta` 가 +1 이면 위로. */
+  const moveLayer = useCallback(
+    (layer: LayerId, delta: number) => {
+      applyEdit((current) => ({ ...current, layers: moveLayerDef(current.layers, layer, delta) }));
+    },
+    [applyEdit],
+  );
+
+  /** 레이어를 남기고 모든 페이지에서 그 칸만 비운다. */
+  const clearLayer = useCallback(
+    (layer: LayerId) => {
+      applyEdit((current) => ({
+        ...current,
+        pages: current.pages.map((page) => clearLayerOnPage(page, layer)),
+      }));
+      setSelectedKey(null);
+      setSelectionRange(null);
+    },
+    [applyEdit],
+  );
+
+  /**
+   * 사용자 레이어를 지운다.
+   *
+   * 그 레이어의 칸과 팔레트 항목도 함께 버린다. 레이어가 없으면 그릴 자리도
+   * 고를 자리도 없으므로, 남겨 두면 파일에만 쌓이는 짐이 된다.
+   */
+  const deleteLayer = useCallback(
+    (layer: LayerId) => {
+      const target = layerById(project.layers, layer);
+      if (!target || target.builtin) return;
+
+      applyEdit((current) => ({
+        ...current,
+        layers: deleteLayerDef(current.layers, layer),
+        pages: current.pages.map((page) => dropLayerFromPage(page, layer)),
+        palette: current.palette.filter((item) => item.layer !== layer),
+      }));
+
+      if (activeLayer === layer) setActiveLayer("equipment");
+      if (activeItem?.layer === layer) {
+        const replacement = fallbackItem(project.palette.filter((item) => item.layer !== layer), "status");
+        setActiveId(replacement ? replacement.id : "");
+      }
+      setSelectedKey(null);
+      setSelectionRange(null);
+    },
+    [activeItem?.layer, activeLayer, applyEdit, project.layers, project.palette],
+  );
 
   const zoomBy = useCallback((delta: number) => {
     setCell((current) => {
@@ -629,6 +738,8 @@ export function useEditor() {
       activeId,
       activeItem,
       activeLayer,
+      activeLayerDef,
+      layerLocked,
       visible,
       showGrid,
       showRuler,
@@ -641,14 +752,15 @@ export function useEditor() {
       preview,
       canUndo: history.past.length > 0,
       canRedo: history.future.length > 0,
-      savedAt,
     }),
     [
       activeId,
       activeItem,
       activeLayer,
+      activeLayerDef,
       activePageDoc,
       cell,
+      layerLocked,
       clipboard,
       doc,
       history.future.length,
@@ -657,7 +769,6 @@ export function useEditor() {
       noteKey,
       preview,
       project,
-      savedAt,
       selectedKey,
       selectionRange,
       showGrid,
@@ -678,6 +789,12 @@ export function useEditor() {
       selectPalette,
       setActiveLayer,
       toggleLayer,
+      toggleLayerLock,
+      addLayer,
+      renameLayer,
+      moveLayer,
+      clearLayer,
+      deleteLayer,
       setShowGrid,
       setShowRuler,
       zoomBy,

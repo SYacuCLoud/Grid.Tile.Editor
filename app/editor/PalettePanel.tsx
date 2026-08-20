@@ -1,24 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { ProjectDoc } from "./doc";
-import {
-  itemsOfRole,
-  LAYERS,
-  type LayerId,
-  NEW_ITEM_COLOR,
-  type PaletteId,
-  type PaletteRole,
-  rolesOfLayer,
-} from "./palette";
+import { layerCellCount, type ProjectDoc } from "./doc";
+import { LayerAddForm, LayerRow } from "./LayerControls";
+import { type LayerInput, layerSections, MAX_LAYERS } from "./layers";
+import { itemsOfSection, type LayerId, NEW_ITEM_COLOR, type PaletteId, type PaletteRole } from "./palette";
 import { type DeleteMode, type PaletteInput, usageCountInProject } from "./paletteOps";
-import {
-  expandCollapsed,
-  isCollapsed,
-  loadCollapsed,
-  saveCollapsed,
-  toggleCollapsed,
-} from "./paletteCollapse";
+import { type CollapseKey, expandCollapsed, isCollapsed, loadCollapsed, saveCollapsed, toggleCollapsed } from "./paletteCollapse";
 import { PaletteDeleteConfirm } from "./PaletteDeleteConfirm";
 import { PaletteItemForm } from "./PaletteItemForm";
 import { PaletteSwatch } from "./PaletteSwatch";
@@ -29,9 +17,10 @@ const ADD_BUTTON =
   "h-6 shrink-0 border border-slate-400 bg-white px-2 text-[11px] font-semibold text-slate-800 hover:bg-slate-100";
 
 type Mode =
-  | { kind: "add"; role: PaletteRole }
+  | { kind: "add"; section: CollapseKey; role: PaletteRole; layerId: string }
   | { kind: "edit"; id: PaletteId }
   | { kind: "delete"; id: PaletteId }
+  | { kind: "addLayer" }
   | null;
 
 interface PalettePanelProps {
@@ -43,14 +32,20 @@ interface PalettePanelProps {
   onSelect: (id: PaletteId) => void;
   onToggleLayer: (layer: LayerId) => void;
   onFocusLayer: (layer: LayerId) => void;
-  onAddItem: (role: PaletteRole, input: PaletteInput) => string | null;
+  onToggleLayerLock: (layer: LayerId) => void;
+  onAddLayer: (input: LayerInput) => string | null;
+  onRenameLayer: (layer: LayerId, name: string) => string | null;
+  onMoveLayer: (layer: LayerId, delta: number) => void;
+  onClearLayer: (layer: LayerId) => void;
+  onDeleteLayer: (layer: LayerId) => void;
+  onAddItem: (role: PaletteRole, input: PaletteInput, layerId?: string) => string | null;
   onUpdateItem: (id: PaletteId, input: PaletteInput) => string | null;
   onDeleteItem: (id: PaletteId, mode: DeleteMode) => void;
 }
 
 export function PalettePanel(props: PalettePanelProps) {
   const [mode, setMode] = useState<Mode>(null);
-  const [collapsed, setCollapsed] = useState<PaletteRole[]>([]);
+  const [collapsed, setCollapsed] = useState<CollapseKey[]>([]);
   const close = () => setMode(null);
 
   useEffect(() => {
@@ -58,71 +53,87 @@ export function PalettePanel(props: PalettePanelProps) {
     setCollapsed(loadCollapsed());
   }, []);
 
-  const applyCollapsed = (next: PaletteRole[]) => {
+  const applyCollapsed = (next: CollapseKey[]) => {
     setCollapsed(next);
     saveCollapsed(next);
   };
 
   // 접힌 분류에서 '추가' 를 누르면 입력 칸이 보이도록 함께 펼친다.
-  const startAdd = (role: PaletteRole) => {
-    applyCollapsed(expandCollapsed(collapsed, role));
-    setMode({ kind: "add", role });
+  const startAdd = (section: CollapseKey, role: PaletteRole, layerId: string) => {
+    applyCollapsed(expandCollapsed(collapsed, section));
+    setMode({ kind: "add", section, role, layerId });
   };
+
+  // 위에 얹히는 레이어를 위에 보여 준다. 그리는 순서(앞이 아래)와 목록 순서가
+  // 뒤집혀 있으면 '위로' 를 눌렀을 때 목록에서 아래로 내려가 보인다.
+  const layers = [...props.project.layers].reverse();
+  const full = props.project.layers.length >= MAX_LAYERS;
 
   return (
     <aside className="flex w-60 shrink-0 flex-col gap-3 overflow-y-auto border-r border-slate-300 bg-slate-50 p-3">
-      {LAYERS.map((layer) => (
-        <section key={layer.id}>
-          <div className="mb-1 flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={() => props.onFocusLayer(layer.id)}
-              className={`text-left text-[12px] font-semibold ${
-                props.activeLayer === layer.id ? "text-slate-900" : "text-slate-500"
-              }`}
-              title="이 레이어를 편집 대상으로"
-            >
-              {layer.name}
-              <span className="ml-1 font-normal text-slate-400">{layer.hint}</span>
-            </button>
-            <label className="flex shrink-0 items-center gap-1 text-[11px] text-slate-600">
-              <input
-                type="checkbox"
-                checked={props.visible[layer.id]}
-                onChange={() => props.onToggleLayer(layer.id)}
-                aria-label={`${layer.name} 레이어 표시`}
-              />
-              표시
-            </label>
-          </div>
+      <div>
+        <div className="mb-1 flex items-center justify-between gap-2 border-b border-slate-300 pb-1">
+          <span className="text-[11px] font-semibold tracking-wide text-slate-500">
+            레이어 <span className="font-normal text-slate-400">({props.project.layers.length})</span>
+          </span>
+          <button
+            type="button"
+            className={ADD_BUTTON}
+            onClick={() => setMode(mode?.kind === "addLayer" ? null : { kind: "addLayer" })}
+            disabled={full}
+            title={full ? `레이어는 ${MAX_LAYERS}개까지 만들 수 있다` : "새 레이어를 만든다"}
+            aria-expanded={mode?.kind === "addLayer"}
+          >
+            + 레이어 추가
+          </button>
+        </div>
+        {mode?.kind === "addLayer" ? <LayerAddForm onSubmit={props.onAddLayer} onCancel={close} /> : null}
+      </div>
 
-          {rolesOfLayer(layer.id).map((role) => {
-            const items = itemsOfRole(props.project.palette, role.id);
-            const folded = isCollapsed(collapsed, role.id);
+      {layers.map((layer, indexFromTop) => (
+        <section key={layer.id}>
+          <LayerRow
+            layer={layer}
+            active={props.activeLayer === layer.id}
+            cellCount={layerCellCount(props.project, layer.id)}
+            canMoveUp={indexFromTop > 0}
+            canMoveDown={indexFromTop < layers.length - 1}
+            onFocus={() => props.onFocusLayer(layer.id)}
+            onToggleVisible={() => props.onToggleLayer(layer.id)}
+            onToggleLock={() => props.onToggleLayerLock(layer.id)}
+            onRename={(name) => props.onRenameLayer(layer.id, name)}
+            onMove={(delta) => props.onMoveLayer(layer.id, delta)}
+            onClear={() => props.onClearLayer(layer.id)}
+            onDelete={() => props.onDeleteLayer(layer.id)}
+          />
+
+          {layerSections(layer).map((section) => {
+            const items = itemsOfSection(props.project.palette, section.layerId, section.role);
+            const folded = isCollapsed(collapsed, section.key);
             const activeItem = items.find((item) => item.id === props.activeId) ?? null;
 
             return (
-              <div key={role.id} className="mb-2">
+              <div key={section.key} className="mb-2">
                 <div className="mb-1 flex items-center justify-between gap-2 border-b border-slate-200 pb-0.5">
                   <button
                     type="button"
                     className="flex min-w-0 items-center gap-1 text-left text-[11px] font-semibold text-slate-600 hover:text-slate-900"
-                    onClick={() => applyCollapsed(toggleCollapsed(collapsed, role.id))}
+                    onClick={() => applyCollapsed(toggleCollapsed(collapsed, section.key))}
                     aria-expanded={!folded}
-                    title={`${role.hint} — 눌러서 ${folded ? "펼치기" : "접기"}`}
+                    title={`${section.hint} — 눌러서 ${folded ? "펼치기" : "접기"}`}
                   >
                     <span className="w-3 shrink-0 text-slate-400">{folded ? "▶" : "▼"}</span>
-                    {role.name}
+                    <span className="truncate">{section.name}</span>
                     <span className="font-normal text-slate-400">({items.length})</span>
                   </button>
-                  {role.editable ? (
+                  {section.editable ? (
                     <button
                       type="button"
                       className={ADD_BUTTON}
-                      onClick={() => startAdd(role.id)}
-                      title={`${role.name} 항목을 새로 만든다`}
+                      onClick={() => startAdd(section.key, section.role, section.layerId)}
+                      title={`${section.name} 항목을 새로 만든다`}
                     >
-                      {role.addLabel}
+                      {section.addLabel}
                     </button>
                   ) : (
                     <span className="text-[10px] text-slate-400">고정</span>
@@ -134,7 +145,7 @@ export function PalettePanel(props: PalettePanelProps) {
                   <button
                     type="button"
                     className="mb-1 flex w-full items-center gap-2 border border-slate-800 bg-white px-1 py-1 text-left text-[12px] font-semibold text-slate-900"
-                    onClick={() => applyCollapsed(expandCollapsed(collapsed, role.id))}
+                    onClick={() => applyCollapsed(expandCollapsed(collapsed, section.key))}
                     title="눌러서 이 분류를 펼친다"
                   >
                     <PaletteSwatch item={activeItem} size={16} />
@@ -143,17 +154,17 @@ export function PalettePanel(props: PalettePanelProps) {
                   </button>
                 ) : null}
 
-                {!folded && mode?.kind === "add" && mode.role === role.id ? (
+                {!folded && mode?.kind === "add" && mode.section === section.key ? (
                   <div className="mb-1">
                     <PaletteItemForm
-                      title={`${role.name} 추가`}
-                      role={role.id}
+                      title={`${section.name} 추가`}
+                      role={section.role}
                       initialName=""
                       initialColor={NEW_ITEM_COLOR}
                       initialDescription=""
                       submitLabel="추가"
                       onSubmit={(input) => {
-                        const error = props.onAddItem(role.id, input);
+                        const error = props.onAddItem(section.role, input, section.layerId);
                         if (!error) close();
                         return error;
                       }}
@@ -167,8 +178,8 @@ export function PalettePanel(props: PalettePanelProps) {
                     <li key={item.id}>
                       {mode?.kind === "edit" && mode.id === item.id ? (
                         <PaletteItemForm
-                          title={`${role.name} 편집`}
-                          role={role.id}
+                          title={`${section.name} 편집`}
+                          role={section.role}
                           initialName={item.name}
                           initialColor={item.color ?? NEW_ITEM_COLOR}
                           initialDescription={item.description ?? ""}
@@ -210,7 +221,7 @@ export function PalettePanel(props: PalettePanelProps) {
                             <span className="truncate">{item.name}</span>
                           </button>
 
-                          {role.editable ? (
+                          {section.editable ? (
                             <>
                               <button
                                 type="button"
@@ -237,21 +248,13 @@ export function PalettePanel(props: PalettePanelProps) {
                 </ul>
 
                 {!folded && items.length === 0 ? (
-                  <p className="py-1 text-[11px] text-slate-400">
-                    항목이 없다. {role.editable ? `위의 '${role.name} 추가' 로 만든다.` : ""}
-                  </p>
+                  <p className="py-1 text-[11px] text-slate-400">항목 없음</p>
                 ) : null}
               </div>
             );
           })}
         </section>
       ))}
-
-      <p className="mt-auto border-t border-slate-200 pt-2 text-[11px] leading-relaxed text-slate-500">
-        상태는 칸을 그 색으로 칠하고, 장비는 같은 칸에 이름을 올리며 그 색을 테두리로 두른다. 배선은 고른 색으로 선을 잇는다.
-        <br />
-        추가·수정한 항목은 도면과 함께 자동 저장되고 JSON 에도 담긴다.
-      </p>
     </aside>
   );
 }

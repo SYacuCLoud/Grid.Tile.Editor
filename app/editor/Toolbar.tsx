@@ -15,7 +15,6 @@ interface ToolbarProps {
   showGrid: boolean;
   showRuler: boolean;
   cell: number;
-  savedAt: string | null;
   onTitle: (value: string) => void;
   onTool: (tool: ToolId) => void;
   onUndo: () => void;
@@ -123,9 +122,6 @@ export function Toolbar(props: ToolbarProps) {
       </div>
 
       <div className="ml-auto flex items-center gap-1">
-        <span className="mr-2 text-[12px] text-slate-500">
-          {props.savedAt ? `자동 저장 ${props.savedAt}` : "자동 저장 대기"}
-        </span>
         <button type="button" className={BUTTON} onClick={props.onExportPng} title="현재 선택된 페이지의 배치도 및 범례를 PNG 이미지로 내보냅니다">
           PNG 저장 (현재 페이지)
         </button>

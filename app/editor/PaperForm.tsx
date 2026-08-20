@@ -45,9 +45,7 @@ export function PaperForm(props: PaperFormProps) {
         <button type="button" className={`${FIELD} h-8 hover:bg-slate-100`} onClick={() => props.onChange(defaultPaper())}>
           인쇄 경계선 켜기
         </button>
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-          큰 도면이 몇 장에 걸쳐 인쇄되는지, 어디서 잘리는지 점선으로 보여 줍니다. 격자와 PNG 는 바뀌지 않습니다.
-        </p>
+        <p className="mt-1 text-[11px] text-slate-500">인쇄될 장 경계를 점선으로 보여 줍니다.</p>
       </>
     );
   }
@@ -121,15 +119,16 @@ export function PaperForm(props: PaperFormProps) {
       </div>
 
       <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
-        {size.widthMm} × {size.heightMm}mm · 한 장에 가로 {per.cols} × 세로 {per.rows}칸
+        {size.widthMm} × {size.heightMm}mm · 한 장에 {per.cols} × {per.rows}칸
         <br />
-        이 격자({cols} × {rows}) + 범례 {band}행은{" "}
-        <span className="font-semibold text-slate-900">가로 {count.across} · 세로 {count.down} = {count.total}장</span>
+        {cols} × {rows} + 범례 {band}행 →{" "}
+        <span className="font-semibold text-slate-900">
+          {count.across} × {count.down} = {count.total}장
+        </span>
       </p>
 
-      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-        `PNG 저장` 은 이 용지 규격({DEFAULT_PRINT_DPI}dpi)으로 뽑습니다.
-        {count.total > 1 ? ` 장마다 파일이 나뉘어 ${count.total}개가 내려받아집니다.` : " 100% 배율로 인쇄하면 화면 경계선과 자리가 맞습니다."}
+      <p className="mt-1 text-[11px] text-slate-500">
+        PNG 저장: 이 규격 {DEFAULT_PRINT_DPI}dpi{count.total > 1 ? ` · 파일 ${count.total}개` : ""}
       </p>
 
       <button

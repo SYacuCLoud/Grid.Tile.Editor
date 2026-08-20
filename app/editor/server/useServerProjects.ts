@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ProjectDoc } from "../doc";
 import {
@@ -68,6 +68,8 @@ export function useServerProjects(
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState<SaveConflict | null>(null);
   const [history, setHistory] = useState<RevisionMeta[] | null>(null);
+  /** 첫 화면에서 서버 도면을 자동으로 열어 보았는지. 한 번만 한다. */
+  const autoOpened = useRef(false);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 브라우저 저장소에서 1회 동기화
@@ -121,6 +123,25 @@ export function useServerProjects(
     },
     [replaceProject],
   );
+
+  /**
+   * 첫 화면에 서버의 가장 최근 도면을 올린다.
+   *
+   * 도면을 브라우저에 저장하지 않게 되면서, 이것이 없으면 새로고침마다 예시
+   * 도면으로 돌아가고 사용자는 매번 목록에서 자기 도면을 다시 골라야 한다.
+   *
+   * 한 번만 한다. 사용자가 목록에서 예시 도면으로 되돌아왔을 때 다시 끌어오면
+   * 고른 것을 뒤집는 셈이 된다.
+   */
+  useEffect(() => {
+    if (autoOpened.current) return;
+    if (available !== true || currentId !== null || projects.length === 0) return;
+    autoOpened.current = true;
+
+    const newest = [...projects].sort((a, b) => (b.savedAt ?? "").localeCompare(a.savedAt ?? ""))[0];
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 서버에서 1회 불러오기
+    void open(newest.id);
+  }, [available, currentId, open, projects]);
 
   const createNew = useCallback(
     async (title: string) => {

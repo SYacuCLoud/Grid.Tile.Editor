@@ -236,7 +236,6 @@ export function InspectorPanel(props: InspectorPanelProps) {
             </li>
           ))}
         </ul>
-        <p className="mt-1 text-[11px] text-slate-500">팔레트에서 항목을 고치면 범례와 PNG 도 함께 바뀐다.</p>
       </section>
 
       <section className="text-[12px] text-slate-600">
@@ -244,12 +243,6 @@ export function InspectorPanel(props: InspectorPanelProps) {
         <p>설비 칸 {counts.equipment}개</p>
         <p>배선 칸 {counts.wiring}개</p>
         <p>배경 칸 {counts.background}개</p>
-      </section>
-
-      <section className="mt-auto border-t border-slate-200 pt-2 text-[11px] leading-relaxed text-slate-500">
-        <p>왼쪽에서 항목을 고르고 도면 위에서 끌면 연속으로 칠해진다.</p>
-        <p>되돌리기 Ctrl+Z · 다시 실행 Ctrl+Y</p>
-        <p>작업 내용은 이 브라우저에 자동 저장된다.</p>
       </section>
     </aside>
   );

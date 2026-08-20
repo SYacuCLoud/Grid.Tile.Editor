@@ -12,6 +12,7 @@ import {
 } from "./photo";
 import { downloadPhoto, openPhotoLedger } from "./photoExport";
 import { entriesFromCell, ledgerSubtitle, positionText } from "./photoLedger";
+import { PhotoLightbox } from "./PhotoLightbox";
 
 const PANEL_WIDTH = 240;
 
@@ -46,6 +47,8 @@ export function CellNotePopover(props: CellNotePopoverProps) {
   const [photos, setPhotos] = useState<string[]>(props.initialPhotos);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [dropping, setDropping] = useState(false);
+  /** 확대해서 보는 사진의 순번. 닫혀 있으면 null. */
+  const [zoomed, setZoomed] = useState<number | null>(null);
   const labelRef = useRef<HTMLInputElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -56,14 +59,18 @@ export function CellNotePopover(props: CellNotePopoverProps) {
   }, []);
 
   // Esc 로 닫는다. (도면을 클릭하면 그리기 쪽에서 닫는다.)
+  // 확대 보기가 열려 있으면 그쪽이 Esc 를 먼저 쓴다 — 한 번의 Esc 로 확대 보기와
+  // 상자가 함께 닫히면 방금 붙인 사진을 저장할 자리를 잃는다.
   const onClose = props.onClose;
+  const zoomOpen = zoomed !== null;
   useEffect(() => {
+    if (zoomOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, zoomOpen]);
 
   const flipX = (x + 1) * cell + PANEL_WIDTH > cols * cell;
   const flipY = y > rows - 8;
@@ -113,6 +120,8 @@ export function CellNotePopover(props: CellNotePopoverProps) {
   const removePhoto = (index: number) => {
     setPhotos(photos.filter((_, i) => i !== index));
     setPhotoError(null);
+    // 보고 있던 장이 사라지면 순번이 어긋난다. 확대 보기를 닫아 버린다.
+    setZoomed(null);
   };
 
   const full = photos.length >= MAX_CELL_PHOTOS;
@@ -217,20 +226,39 @@ export function CellNotePopover(props: CellNotePopoverProps) {
           <ul className="mt-0.5 grid grid-cols-3 gap-1">
             {photos.map((photo, index) => (
               <li key={photo.slice(-24)} className="relative">
-                {/* eslint-disable-next-line @next/next/no-img-element -- data URL 미리보기라 최적화 대상이 아니다 */}
-                <img
-                  src={photo}
-                  alt={`칸 사진 ${index + 1}`}
-                  className="h-16 w-full border border-slate-300 object-cover"
-                />
-                <span className="absolute inset-x-0 bottom-0 bg-slate-900/70 px-0.5 text-center text-[9px] leading-tight text-white">
+                <button
+                  type="button"
+                  className="group block w-full cursor-pointer"
+                  onClick={() => setZoomed(index)}
+                  title={`${index + 1}번째 사진 — 클릭하여 확대`}
+                  aria-label={`${index + 1}번째 사진 확대해서 보기`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element -- data URL 미리보기라 최적화 대상이 아니다 */}
+                  <img
+                    src={photo}
+                    alt={`칸 사진 ${index + 1}`}
+                    className="h-16 w-full border border-slate-300 object-cover"
+                  />
+                  {/* 올려 놓으면 확대할 수 있다는 것이 보인다. 평소에는 사진을 가리지 않는다. */}
+                  <span className="absolute inset-0 flex items-center justify-center text-[15px] text-transparent transition-colors group-hover:bg-slate-900/35 group-hover:text-white">
+                    🔍
+                  </span>
+                </button>
+
+                {/* 크기 표시는 썸네일 위에 얹히므로 눌러도 확대가 막히지 않게 해 둔다. */}
+                <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-slate-900/70 px-0.5 text-center text-[9px] leading-tight text-white">
                   {formatBytes(photoBytes(photo))}
                 </span>
+
+                {/* 저장·삭제는 썸네일 단추의 형제다. 눌러도 확대로 이어지지 않는다. */}
                 <div className="absolute top-0 right-0 flex">
                   <button
                     type="button"
                     className="h-4 w-4 border border-slate-400 bg-white text-[9px] leading-none text-slate-700 hover:bg-slate-100"
-                    onClick={() => downloadPhoto(entries()[index])}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      downloadPhoto(entries()[index]);
+                    }}
                     title={`${index + 1}번째 사진 파일로 저장`}
                     aria-label={`${index + 1}번째 사진 파일로 저장`}
                   >
@@ -239,7 +267,10 @@ export function CellNotePopover(props: CellNotePopoverProps) {
                   <button
                     type="button"
                     className="h-4 w-4 border border-slate-400 border-l-0 bg-white text-[10px] leading-none text-slate-700 hover:bg-red-50 hover:text-red-700"
-                    onClick={() => removePhoto(index)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      removePhoto(index);
+                    }}
                     title={`${index + 1}번째 사진 지우기`}
                     aria-label={`${index + 1}번째 사진 지우기`}
                   >
@@ -311,6 +342,17 @@ export function CellNotePopover(props: CellNotePopoverProps) {
       </div>
 
       <p className="mt-1 text-[10px] text-slate-400">Enter 저장 · Shift+Enter 줄바꿈 · Esc 닫기</p>
+
+      {zoomed !== null ? (
+        <PhotoLightbox
+          photos={photos}
+          index={zoomed}
+          caption={[label || null, props.pageName, positionText(entries()[0])].filter(Boolean).join(" · ")}
+          onIndex={setZoomed}
+          onDownload={(index) => downloadPhoto(entries()[index])}
+          onClose={() => setZoomed(null)}
+        />
+      ) : null}
     </div>
   );
 }
