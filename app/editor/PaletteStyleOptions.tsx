@@ -1,6 +1,6 @@
 "use client";
 
-import { PRESET_COLORS } from "./palette";
+import { OPACITY_STEPS, PRESET_COLORS } from "./palette";
 import {
   borderStyleCss,
   FILL_PATTERNS,
@@ -111,6 +111,49 @@ export function LineStylePicker({ color, value, onPick, hint }: LineStylePickerP
               style={{ borderTop: `2px ${borderStyleCss(style.id)} ${color}` }}
             />
             {style.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface OpacityPickerProps {
+  color: string;
+  value: number;
+  onPick: (opacity: number) => void;
+  /** 이 분류의 기본값. 눈금에 표시해 되돌릴 자리를 알려 준다. */
+  fallback: number;
+}
+
+/**
+ * 불투명도. 견본이 실제로 그려질 진하기로 보이므로 숫자를 몰라도 고를 수 있다.
+ *
+ * 배선은 도면 위를 가로질러 지나가므로 기본이 반투명이다 — 진하게 깔면 그 아래
+ * 배경·설비가 가려진다.
+ */
+export function OpacityPicker({ color, value, onPick, fallback }: OpacityPickerProps) {
+  return (
+    <div className="mt-1.5">
+      <p className={LABEL}>
+        진하기 <span className="font-normal text-slate-400">(아래 도면이 비쳐 보인다)</span>
+      </p>
+      <div className="mt-0.5 flex flex-wrap gap-1">
+        {OPACITY_STEPS.map((step) => (
+          <button
+            key={step}
+            type="button"
+            title={`${Math.round(step * 100)}%${step === fallback ? " (기본)" : ""}`}
+            aria-label={`진하기 ${Math.round(step * 100)}퍼센트`}
+            aria-pressed={value === step}
+            onClick={() => onPick(step)}
+            className={`${CHIP} flex items-center gap-1 ${value === step ? CHIP_ON : CHIP_OFF}`}
+          >
+            {/* 흰 바탕 위에 얹어 실제로 얼마나 비치는지 보인다. */}
+            <span className="inline-block h-3.5 w-3.5 border border-slate-400 bg-white">
+              <span className="block h-full w-full" style={{ background: color, opacity: step }} />
+            </span>
+            {Math.round(step * 100)}
           </button>
         ))}
       </div>

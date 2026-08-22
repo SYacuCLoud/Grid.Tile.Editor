@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { DESCRIPTION_MAX, NAME_MAX, type PaletteRole } from "./palette";
+import { DESCRIPTION_MAX, itemOpacity, NAME_MAX, type PaletteRole } from "./palette";
 import type { PaletteInput } from "./paletteOps";
-import { ColorPresets, LineStylePicker, PatternPicker } from "./PaletteStyleOptions";
+import { ColorPresets, LineStylePicker, OpacityPicker, PatternPicker } from "./PaletteStyleOptions";
 import { DEFAULT_LINE_STYLE, DEFAULT_PATTERN, type FillPattern, type LineStyle } from "./pattern";
 
 const FIELD =
@@ -22,6 +22,7 @@ interface PaletteItemFormProps {
   initialDescription: string;
   initialPattern?: FillPattern;
   initialLineStyle?: LineStyle;
+  initialOpacity?: number;
   submitLabel: string;
   /** 문제가 있으면 사용자에게 보일 한 줄을 돌려준다. 성공하면 null. */
   onSubmit: (input: PaletteInput) => string | null;
@@ -35,6 +36,9 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
   const [description, setDescription] = useState(props.initialDescription);
   const [pattern, setPattern] = useState<FillPattern>(props.initialPattern ?? DEFAULT_PATTERN);
   const [lineStyle, setLineStyle] = useState<LineStyle>(props.initialLineStyle ?? DEFAULT_LINE_STYLE);
+  // 분류의 기본 진하기(배선은 반투명)를 시작값으로 둔다.
+  const fallbackOpacity = itemOpacity({ role: props.role });
+  const [opacity, setOpacity] = useState<number>(props.initialOpacity ?? fallbackOpacity);
   const [error, setError] = useState<string | null>(null);
 
   // 칸을 통째로 채우는 분류만 무늬를 쓴다. 장비는 테두리로, 배선은 경로 선으로 보인다.
@@ -48,6 +52,7 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
       description,
       ...(showPattern ? { pattern } : {}),
       ...(showLineStyle ? { lineStyle } : {}),
+      opacity,
     });
     if (message) setError(message);
   };
@@ -78,7 +83,6 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
           <input
             value={name}
             maxLength={NAME_MAX}
-            placeholder="예: 교체 예정"
             onChange={(event) => {
               setName(event.target.value);
               setError(null);
@@ -95,7 +99,6 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
         <input
           value={description}
           maxLength={DESCRIPTION_MAX}
-          placeholder="예: 3월 교체 예정 설비"
           onChange={(event) => {
             setDescription(event.target.value);
             setError(null);
@@ -115,6 +118,7 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
       />
 
       {showPattern ? <PatternPicker color={color} value={pattern} onPick={setPattern} /> : null}
+      <OpacityPicker color={color} value={opacity} onPick={setOpacity} fallback={fallbackOpacity} />
       {showLineStyle ? (
         <LineStylePicker
           color={color}

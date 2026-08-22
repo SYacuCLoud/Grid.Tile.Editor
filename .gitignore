@@ -47,3 +47,6 @@ tsconfig.tsbuildinfo
 # mcp
 /dist-mcp/
 /.grid-projects/
+
+# 서버 실행 로그
+/logs/

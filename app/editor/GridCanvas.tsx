@@ -5,7 +5,7 @@ import { CellNoteBubble } from "./CellNoteBubble";
 import { cellKey, cellPhotos, type LayoutDoc, type Point } from "./doc";
 import { type LayerId, type PaletteItem } from "./palette";
 import { type CellRange } from "./range";
-import { canvasCells, renderDoc } from "./render";
+import { canvasCells, renderDoc, type RenderOptions } from "./render";
 import type { WheelAnchor } from "./zoom";
 
 interface GridCanvasProps {
@@ -32,6 +32,10 @@ interface GridCanvasProps {
   printGuide: { cols: number; rows: number } | null;
   /** 인쇄 경계선 안에 미리 그려 볼 범례. */
   printLegend: { items: PaletteItem[]; bandCells: number; columns: number } | null;
+  /** 칸 좌표 → 메모 번호. 메모가 적힌 칸에 이 번호를 찍는다. */
+  memoIndex?: Record<string, number>;
+  /** 인쇄 경계선 안에 미리 그려 볼 메모 본문. */
+  printMemo: RenderOptions["printMemo"];
   /** 휠 확대·축소. 커서 아래 지점을 고정하려고 그 지점의 좌표를 함께 넘긴다. */
   onWheelZoom: (delta: number, anchor: WheelAnchor) => void;
   /** 메모 편집 상자 등 도면 위에 겹쳐 놓을 것. */
@@ -69,8 +73,10 @@ export function GridCanvas(props: GridCanvasProps) {
       hover,
       printGuide: props.printGuide,
       printLegend: props.printLegend,
+      memoIndex: props.memoIndex,
+      printMemo: props.printMemo,
     });
-  }, [activeLayer, cell, doc, hover, previewItem, previewPoints, props.printGuide, props.printLegend, selectedKey, selectionRange, showGrid, size.height, size.width, visible]);
+  }, [activeLayer, cell, doc, hover, previewItem, previewPoints, props.memoIndex, props.printGuide, props.printLegend, props.printMemo, selectedKey, selectionRange, showGrid, size.height, size.width, visible]);
 
   const onWheelZoom = props.onWheelZoom;
   useEffect(() => {
@@ -142,14 +148,16 @@ export function GridCanvas(props: GridCanvasProps) {
       />
 
       {hover && (hoverMemo || hoverPhotos.length > 0) && !props.noteOpen ? (
+        // cols/rows 는 도면이 아니라 캔버스 칸 수다 — 인쇄 경계선을 켜면 캔버스가
+        // 용지까지 넓어지고, 말풍선은 그 끝에서 right/bottom 을 잰다.
         <CellNoteBubble
           text={hoverMemo ?? ""}
           photos={hoverPhotos}
           x={hover.x}
           y={hover.y}
           cell={cell}
-          cols={doc.cols}
-          rows={doc.rows}
+          cols={span.cols}
+          rows={span.rows}
         />
       ) : null}
 

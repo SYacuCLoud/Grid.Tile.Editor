@@ -39,6 +39,12 @@ const ManagePaletteInput = z.object({
     .enum(LINE_STYLE_IDS)
     .optional()
     .describe("선 모양. 장비는 칸 테두리, 배선은 경로에 쓴다. 생략하면 실선"),
+  opacity: z
+    .number()
+    .gt(0)
+    .lte(1)
+    .optional()
+    .describe("진하기(0~1). 생략하면 분류 기본값 — 배선은 반투명(0.55), 나머지는 불투명"),
   deleteMode: z
     .enum(["keepCells", "purgeCells"])
     .default("keepCells")
@@ -64,6 +70,7 @@ export const managePaletteTool: ToolDef = {
         description: args.description ?? "",
         ...(args.pattern ? { pattern: args.pattern as FillPattern } : {}),
         ...(args.lineStyle ? { lineStyle: args.lineStyle as LineStyle } : {}),
+        ...(args.opacity !== undefined ? { opacity: args.opacity } : {}),
       };
       const problem = validateInput(project.palette, args.role, input);
       if (problem) throw new ToolError(problem);
@@ -86,6 +93,7 @@ export const managePaletteTool: ToolDef = {
         description: args.description ?? target.description ?? "",
         pattern: (args.pattern as FillPattern | undefined) ?? target.pattern,
         lineStyle: (args.lineStyle as LineStyle | undefined) ?? target.lineStyle,
+        opacity: args.opacity ?? target.opacity,
       };
       const problem = validateInput(project.palette, target.role, input, target.id);
       if (problem) throw new ToolError(problem);

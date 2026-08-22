@@ -2,6 +2,7 @@ import { cellKey, cellPhotos, type LayoutDoc, paintedCells, type Point } from ".
 import { defaultLayers, type LayerDef } from "./layers";
 import {
   indexPalette,
+  itemOpacity,
   type LayerId,
   type PaletteIndex,
   type PaletteItem,
@@ -41,6 +42,33 @@ export interface RenderOptions {
     bandCells: number;
     columns: number;
   } | null;
+  /**
+   * 칸 좌표 → 메모 번호. 메모가 적힌 칸에 이 번호를 찍는다.
+   *
+   * 없으면 예전처럼 점만 찍는다 — 번호는 도면 전체를 훑어야 매길 수 있어,
+   * 부르는 쪽에서 한 번 만들어 넘긴다(`memoPrint.memoNumbers`).
+   */
+  memoIndex?: Record<string, number>;
+  /**
+   * 인쇄 경계선 안에 미리 그려 볼 메모 본문.
+   *
+   * 자리는 mm 로 재어 두고(`memoPrint`), 여기서 칸 좌표로 바꿔 그린다. 화면에서
+   * 한 칸이 `cellMm` 에 해당하므로 `(mm - 여백) / cellMm` 이 칸 수다.
+   *
+   * `originCells` 는 이 자리가 놓인 장의 좌상단 칸이다 — 도면이 여러 장에
+   * 걸치면 메모는 마지막 장에 실린다.
+   */
+  printMemo?: {
+    pages: Array<{
+      block: { xMm: number; yMm: number; widthMm: number; heightMm: number; columns: number; linesPerColumn: number };
+      entries: Array<{ no: number; label?: string; memo: string }>;
+      originCells: { x: number; y: number };
+    }>;
+    cellMm: number;
+    marginMm: number;
+    lineMm: number;
+    textMm: number;
+  } | null;
 }
 
 const GRID_LINE = "#d3d9df";
@@ -60,6 +88,11 @@ const MIN_SCALE_X = 0.55;
 
 function fontFor(px: number): string {
   return `${px}px "Segoe UI", "Malgun Gothic", system-ui, sans-serif`;
+}
+
+/** 같은 글꼴의 굵은 꼴. 번호처럼 먼저 눈에 걸려야 하는 글자에 쓴다. */
+function boldFontFor(px: number): string {
+  return `600 ${fontFor(px)}`;
 }
 
 /** 주어진 폭에 들어가는 가장 큰 글자 크기. 못 들어가면 하한선에서 멈춘다. */
@@ -172,7 +205,46 @@ function ellipsize(ctx: CanvasRenderingContext2D, text: string, maxWidth: number
   return `${text.slice(0, cut)}…`;
 }
 
-function paintLine(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, color: string) {
+/**
+ * 장비 ID 글자 뒤에 깔는 형광펜 색.
+ *
+ * 상태색과 겹치지 않아야 한다 — 겹치면 "이 칸의 상태" 로 잘못 읽힌다. 기본
+ * 상태색은 파랑 · 초록 · 빨강 · 노랑이고, 배경 타일은 회색 계열(벽 · 통로 · 문)
+ * 이므로 그 사이에 빈 자리가 분홍뿐이다. 옅은 파스텔은 통로색(`#eef1f4`)에
+ * 붙어 버려 쓸 수 없다.
+ *
+ * (RGB 거리로 재면 상태색과 168, 팔레트 견본과 109, 배경 타일과 106 떨어져 있다.
+ * 색을 고칠 때는 `tests/cell-text.test.mjs` 가 이 여유를 지켜 준다.)
+ */
+export const LABEL_BG = "#ff8fd0";
+/** 형광펜 위에 올릴 글자색. 밝은 바탕이므로 짙게 쓴다. */
+export const LABEL_BG_TEXT = "#2a0a1e";
+
+function paintLine(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  size: number,
+  color: string,
+  bg?: string,
+) {
+  // 형광펜 배경. 글자 자리만 덮도록 폭을 재서 깔고, 테두리(halo) 는 생략한다 —
+  // 배경이 이미 글자를 띄워 주므로 테두리까지 두르면 뭉개진다.
+  if (bg) {
+    const width = ctx.measureText(text).width;
+    const padX = Math.max(1.5, size * 0.22);
+    const padY = Math.max(1, size * 0.14);
+    ctx.save();
+    ctx.fillStyle = bg;
+    ctx.fillRect(x - width / 2 - padX, y - size / 2 - padY, width + padX * 2, size + padY * 2);
+    ctx.restore();
+
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+    return;
+  }
+
   ctx.save();
   ctx.lineWidth = Math.max(2, size * HALO_RATIO);
   ctx.lineJoin = "round";
@@ -191,6 +263,8 @@ function paintLine(ctx: CanvasRenderingContext2D, text: string, x: number, y: nu
  *
  * `maxWidth` 는 글자 테두리(halo)까지 포함한 자리다. 테두리가 굵어 칸 밖으로
  * 번지면 이웃 칸을 침범하므로 그만큼 미리 뺀다.
+ *
+ * `bg` 를 주면 테두리 대신 형광펜 배경을 깐다(장비 ID).
  */
 function drawCenteredText(
   ctx: CanvasRenderingContext2D,
@@ -201,6 +275,7 @@ function drawCenteredText(
   basePx: number,
   color: string,
   maxHeight = basePx,
+  bg?: string,
 ) {
   const halo = Math.max(2, Math.round(basePx) * HALO_RATIO);
   const room = Math.max(4, maxWidth - halo);
@@ -214,7 +289,7 @@ function drawCenteredText(
   const top = cy - ((plan.lines.length - 1) * lineHeight) / 2;
 
   if (plan.scaleX === 1) {
-    plan.lines.forEach((line, index) => paintLine(ctx, line, cx, top + index * lineHeight, plan.size, color));
+    plan.lines.forEach((line, index) => paintLine(ctx, line, cx, top + index * lineHeight, plan.size, color, bg));
     return;
   }
 
@@ -223,10 +298,19 @@ function drawCenteredText(
   ctx.translate(cx, cy);
   ctx.scale(plan.scaleX, 1);
   plan.lines.forEach((line, index) =>
-    paintLine(ctx, line, 0, (index - (plan.lines.length - 1) / 2) * lineHeight, plan.size, color),
+    paintLine(ctx, line, 0, (index - (plan.lines.length - 1) / 2) * lineHeight, plan.size, color, bg),
   );
   ctx.restore();
 }
+
+/** 메모 번호 표시. 상태색·형광펜과 겹치지 않는 짙은 남색. */
+const MEMO_MARK_BG = "#111827";
+const MEMO_MARK_TEXT = "#ffffff";
+
+/** 인쇄 미리보기의 메모 자리. 종이에서 메모가 차지할 곳을 옅게 보여 준다. */
+const MEMO_PREVIEW_BG = "#fbfcfe";
+const MEMO_PREVIEW_BORDER = "#c9d3e0";
+const MEMO_PREVIEW_TEXT = "#334155";
 
 /** 이웃으로 뻗는 네 방향. 이어진 방향으로만 띠를 늘인다. */
 const WIRE_DIRECTIONS: Array<[number, number]> = [
@@ -278,62 +362,87 @@ function isStraightThrough(links: Array<[number, number]>): boolean {
   return links[0][0] === -links[1][0] && links[0][1] === -links[1][1];
 }
 
-function drawWire(
+/**
+ * 한 배선 항목의 칸 전체를 **한 번에** 칠한다.
+ *
+ * 칸마다 따로 칠하면 안 된다. 배선은 칸 안에서 사각형 여러 개(중앙 매듭 + 뻗는
+ * 방향마다 하나)를 겹쳐 그리고, 이웃 칸끼리도 경계에서 맞물린다. 불투명할 때는
+ * 같은 색이 겹쳐도 티가 안 나지만, 반투명이면 겹친 자리만 두 번 칠해져 칸마다
+ * 진한 이음매가 줄줄이 남는다.
+ *
+ * 그래서 모든 사각형을 경로 하나에 모아 `fill` 을 한 번만 부른다 — 겹쳐도 칠은
+ * 한 겹이다.
+ */
+function drawWireItem(
   ctx: CanvasRenderingContext2D,
-  wiring: Record<string, WireId>,
-  index: PaletteIndex,
-  x: number,
-  y: number,
-  id: WireId,
+  cells: Record<string, WireId>,
+  keys: string[],
+  item: PaletteItem,
   cell: number,
 ) {
-  const item = resolveItem(index, id, "wire");
-  const geometry = wireGeometry(wiring, x, y, id, cell, item.color as string);
-  const { color, band, cx, cy, links, rects } = geometry;
+  const color = item.color as string;
   const style = item.lineStyle ?? "solid";
+  const band = Math.max(3, Math.round(cell * 0.34));
 
-  if (style !== "solid") {
-    ctx.save();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = band;
-    ctx.lineCap = "butt";
-    ctx.setLineDash(dashArray(style, band));
+  ctx.save();
+  ctx.globalAlpha = ctx.globalAlpha * itemOpacity(item);
 
-    for (const [dx, dy] of links) {
-      // 언제나 오른쪽·아래 방향으로 긋고 dash 위상을 절대 좌표에 맞춘다.
-      // 칸마다 위상을 0 에서 다시 시작하면 이웃 칸과 점선이 어긋나 끊겨 보인다.
-      const horizontal = dy === 0;
-      const from = horizontal ? Math.min(cx, cx + (dx * cell) / 2) : Math.min(cy, cy + (dy * cell) / 2);
-      const to = horizontal ? Math.max(cx, cx + (dx * cell) / 2) : Math.max(cy, cy + (dy * cell) / 2);
-
-      ctx.lineDashOffset = from;
-      ctx.beginPath();
-      if (horizontal) {
-        ctx.moveTo(from, cy);
-        ctx.lineTo(to, cy);
-      } else {
-        ctx.moveTo(cx, from);
-        ctx.lineTo(cx, to);
-      }
-      ctx.stroke();
+  if (style === "solid") {
+    // 사각형을 모두 한 경로에 모아 한 번만 채운다.
+    ctx.beginPath();
+    for (const key of keys) {
+      const [x, y] = key.split(",").map(Number);
+      const geometry = wireGeometry(cells, x, y, item.id, cell, color);
+      for (const [rx, ry, rw, rh] of geometry.rects) ctx.rect(rx, ry, rw, rh);
     }
-
-    // 모퉁이 · 갈림 · 끝에는 매듭을 채운다. 곧게 지나가는 칸은 점선 그대로 둔다.
-    if (!isStraightThrough(links)) {
-      ctx.setLineDash([]);
-      ctx.fillStyle = color;
-      ctx.fillRect(cx - band / 2, cy - band / 2, band, band);
-    }
-
-    ctx.setLineDash([]);
-    ctx.lineDashOffset = 0;
+    ctx.fillStyle = color;
+    ctx.fill();
     ctx.restore();
     return;
   }
 
-  // 배선은 경로다. 칸을 채우는 무늬는 쓰지 않는다(저장 파일에 남아 있어도 무시한다).
-  ctx.fillStyle = color;
-  for (const [rx, ry, rw, rh] of rects) ctx.fillRect(rx, ry, rw, rh);
+  // 점선·파선. 선은 겹치지 않게 한 방향으로만 긋고, 매듭은 뒤에 한 번에 채운다.
+  const knots: Array<[number, number, number, number]> = [];
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = band;
+  ctx.lineCap = "butt";
+  ctx.setLineDash(dashArray(style, band));
+
+  for (const key of keys) {
+    const [x, y] = key.split(",").map(Number);
+    const { cx, cy, links } = wireGeometry(cells, x, y, item.id, cell, color);
+
+    for (const [dx, dy] of links) {
+      // 오른쪽·아래로만 긋는다. 양쪽에서 그으면 칸 경계의 같은 자리를 두 번
+      // 지나 반투명일 때 이음매가 진해진다.
+      if (dx < 0 || dy < 0) continue;
+
+      // 이웃 칸의 중심까지 한 번에 긋고, dash 위상을 절대 좌표에 맞춘다.
+      // 칸마다 위상을 0 에서 다시 시작하면 이웃 칸과 점선이 어긋나 끊겨 보인다.
+      const horizontal = dy === 0;
+      ctx.lineDashOffset = horizontal ? cx : cy;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + dx * cell, cy + dy * cell);
+      ctx.stroke();
+    }
+
+    // 모퉁이 · 갈림 · 끝에는 매듭을 채운다. 곧게 지나가는 칸은 점선 그대로 둔다.
+    if (!isStraightThrough(links)) knots.push([cx - band / 2, cy - band / 2, band, band]);
+  }
+
+  ctx.setLineDash([]);
+  ctx.lineDashOffset = 0;
+
+  if (knots.length > 0) {
+    ctx.beginPath();
+    for (const [kx, ky, kw, kh] of knots) ctx.rect(kx, ky, kw, kh);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  ctx.restore();
 }
 
 /**
@@ -365,8 +474,10 @@ function drawLegendSwatch(ctx: CanvasRenderingContext2D, item: PaletteItem, x: n
     ctx.strokeRect(x + 0.5, y + 0.5, box, box);
 
     // 배선은 칸을 채우지 않고 지나간다. 견본도 가로지르는 선으로 보인다.
+    // 도면과 같은 불투명도로 그려야 목록에서 고른 것이 도면과 같아 보인다.
     const band = Math.max(2, box * 0.34);
     ctx.save();
+    ctx.globalAlpha = ctx.globalAlpha * itemOpacity(item);
     ctx.strokeStyle = color;
     ctx.lineWidth = band;
     ctx.setLineDash(dashArray(item.lineStyle, band));
@@ -469,7 +580,7 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
 
     if (layer.kind === "fill") drawFillLayer(ctx, doc, layer, index, cell);
     else if (layer.kind === "wire") drawWireLayer(ctx, doc, layer, index, cell);
-    else drawEquipmentLayer(ctx, doc, index, cell);
+    else drawEquipmentLayer(ctx, doc, index, cell, options.memoIndex);
   }
   if (!gridDrawn) drawGrid();
 
@@ -503,7 +614,12 @@ function drawFillLayer(
   }
 }
 
-/** 이웃한 칸끼리 선을 잇는 레이어. 배선과 사용자 선 레이어가 같은 길을 쓴다. */
+/**
+ * 이웃한 칸끼리 선을 잇는 레이어. 배선과 사용자 선 레이어가 같은 길을 쓴다.
+ *
+ * 항목별로 모아 한 번에 그린다 — 반투명일 때 칸마다 따로 칠하면 겹친 자리가
+ * 두 번 칠해져 이음매가 진해진다.
+ */
 function drawWireLayer(
   ctx: CanvasRenderingContext2D,
   doc: LayoutDoc,
@@ -512,13 +628,26 @@ function drawWireLayer(
   cell: number,
 ) {
   const cells = paintedCells(doc, layer.id);
+
+  const byItem = new Map<WireId, string[]>();
   for (const [key, id] of Object.entries(cells)) {
-    const [x, y] = key.split(",").map(Number);
-    drawWire(ctx, cells, index, x, y, id, cell);
+    const keys = byItem.get(id);
+    if (keys) keys.push(key);
+    else byItem.set(id, [key]);
+  }
+
+  for (const [id, keys] of byItem) {
+    drawWireItem(ctx, cells, keys, resolveItem(index, id, "wire"), cell);
   }
 }
 
-function drawEquipmentLayer(ctx: CanvasRenderingContext2D, doc: LayoutDoc, index: PaletteIndex, cell: number) {
+function drawEquipmentLayer(
+  ctx: CanvasRenderingContext2D,
+  doc: LayoutDoc,
+  index: PaletteIndex,
+  cell: number,
+  memoIndex?: Record<string, number>,
+) {
   for (const [key, data] of Object.entries(doc.equipment)) {
     const [x, y] = key.split(",").map(Number);
     const px = x * cell;
@@ -556,14 +685,48 @@ function drawEquipmentLayer(ctx: CanvasRenderingContext2D, doc: LayoutDoc, index
     if (data.label && cell >= 12) {
       const cy = data.kind ? py + cell * 0.28 : py + cell / 2;
       const room = data.kind ? cell * 0.4 : cell * 0.8;
-      drawCenteredText(ctx, data.label, px + cell / 2, cy, cell - 5, cell * 0.34, textColor, room);
+      // 장비 ID 는 형광펜 배경을 깐다. 상태색과 겹치지 않는 옅은 색이라 어느 칸
+      // 위에서도 "여기 적어 둔 번호" 로 읽힌다. (장비 이름은 그대로 둔다.)
+      drawCenteredText(
+        ctx,
+        data.label,
+        px + cell / 2,
+        cy,
+        cell - 5,
+        cell * 0.34,
+        LABEL_BG_TEXT,
+        room,
+        LABEL_BG,
+      );
     }
 
     if (data.memo) {
-      ctx.fillStyle = "#111827";
-      ctx.beginPath();
-      ctx.arc(px + cell - 4, py + 4, 2, 0, Math.PI * 2);
-      ctx.fill();
+      // 메모가 적힌 칸에는 번호를 찍는다. 본문은 용지 빈 곳이나 별지에 실리고,
+      // 이 번호가 둘을 잇는다. 메모를 인쇄하지 않을 때도 번호는 매긴다 —
+      // 종이에 본문이 없어도 화면에서 세는 순서가 달라지면 안 된다.
+      const no = memoIndex?.[key];
+      const dot = Math.max(3, Math.round(cell * 0.16));
+      const cxDot = px + cell - dot - 1;
+      const cyDot = py + dot + 1;
+
+      if (no !== undefined && cell >= 16) {
+        ctx.fillStyle = MEMO_MARK_BG;
+        ctx.beginPath();
+        ctx.arc(cxDot, cyDot, dot, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = MEMO_MARK_TEXT;
+        ctx.font = fontFor(Math.max(6, dot * 1.3));
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(no), cxDot, cyDot + dot * 0.06);
+      } else {
+        // 작은 배율에서는 번호가 뭉개진다. 있다는 표시만 남긴다.
+        ctx.fillStyle = MEMO_MARK_BG;
+        ctx.beginPath();
+        ctx.arc(px + cell - 4, py + 4, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // 사진이 붙은 칸은 왼쪽 아래에 작은 네모 표시를 둔다. 메모 점(오른쪽 위)과
@@ -592,6 +755,123 @@ function drawEquipmentLayer(ctx: CanvasRenderingContext2D, doc: LayoutDoc, index
   }
 }
 
+/**
+ * 인쇄물에 실릴 메모 본문을 화면에 미리 그린다.
+ *
+ * 자리는 mm 로 재어 두었으므로(`memoPrint`) 칸 크기로 나눠 칸 좌표로 바꾼다.
+ * 화면에서 한 칸이 `cellMm` 이니, `(mm - 여백) / cellMm * cell` 이 픽셀이다.
+ *
+ * 인쇄물의 글자 크기도 같은 자로 재어, 배율을 올리면 종이에서 보일 크기 그대로
+ * 커진다 — 미리보기가 실제와 어긋나면 볼 이유가 없다.
+ */
+function drawMemoPreview(
+  ctx: CanvasRenderingContext2D,
+  memo: NonNullable<RenderOptions["printMemo"]>,
+  cell: number,
+) {
+  const { cellMm, marginMm, lineMm, textMm } = memo;
+  // mm → 화면 픽셀. 여백은 용지 기준이고 도면은 여백 안쪽에서 시작하므로 뺀다.
+  const toPx = (mm: number) => ((mm - marginMm) / cellMm) * cell;
+  const spanPx = (mm: number) => (mm / cellMm) * cell;
+
+  const size = spanPx(textMm);
+  // 너무 작으면 글자가 뭉개진다. 자리만 보여 준다.
+  const readable = size >= 5;
+  const lineH = spanPx(lineMm);
+
+  for (const page of memo.pages) {
+    const { block, entries, originCells } = page;
+    const left = originCells.x * cell + toPx(block.xMm);
+    const top = originCells.y * cell + toPx(block.yMm);
+    const width = spanPx(block.widthMm);
+    const height = spanPx(block.heightMm);
+
+    // 메모가 놓일 자리를 옅게 칠해 둔다 — 여기가 종이에서 메모가 차지할 곳이다.
+    ctx.fillStyle = MEMO_PREVIEW_BG;
+    ctx.fillRect(left, top, width, height);
+    ctx.strokeStyle = MEMO_PREVIEW_BORDER;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.strokeRect(left + 0.5, top + 0.5, width - 1, height - 1);
+
+    if (!readable) continue;
+
+    ctx.save();
+    // 자리를 넘는 글자는 자른다. 이웃 장으로 새어 나가면 미리보기가 거짓이 된다.
+    ctx.beginPath();
+    ctx.rect(left, top, width, height);
+    ctx.clip();
+
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+
+    const columnW = width / Math.max(1, block.columns);
+    let column = 0;
+    let used = 0;
+
+    for (const entry of entries) {
+      // 인쇄와 같은 셈으로 줄 수를 잡는다(`memoLineCount` 와 같은 어림).
+      const head = `${entry.no}. ${entry.label ? `${entry.label} · ` : ""}`;
+      const text = `${head}${entry.memo}`;
+      const perCharMm = textMm * 0.62;
+      const columnWidthMm = block.widthMm / Math.max(1, block.columns);
+      const perLine = Math.max(8, Math.floor((columnWidthMm - 2) / perCharMm));
+      const need =
+        text.split(/\r?\n/).reduce((sum, p) => sum + Math.max(1, Math.ceil(p.length / perLine)), 0) + 1;
+
+      if (used + need > block.linesPerColumn && column + 1 < block.columns) {
+        column += 1;
+        used = 0;
+      }
+
+      const x = left + column * columnW;
+      let y = top + used * lineH;
+
+      ctx.font = boldFontFor(size);
+      ctx.fillStyle = MEMO_MARK_BG;
+      ctx.fillText(`${entry.no}.`, x + 1, y);
+      const headW = ctx.measureText(`${entry.no}. `).width;
+
+      ctx.font = fontFor(size);
+      ctx.fillStyle = MEMO_PREVIEW_TEXT;
+
+      const room = columnW - headW - 2;
+      const body = `${entry.label ? `${entry.label} · ` : ""}${entry.memo}`;
+      for (const paragraph of body.split(/\r?\n/)) {
+        for (const line of wrapToWidth(ctx, paragraph, room)) {
+          ctx.fillText(line, x + 1 + headW, y);
+          y += lineH;
+        }
+      }
+
+      used += need;
+      if (used >= block.linesPerColumn && column + 1 >= block.columns) break;
+    }
+
+    ctx.restore();
+  }
+}
+
+/** 글자 폭을 재서 주어진 폭에 맞게 접는다. 단어 경계가 없는 한글도 글자 단위로 끊는다. */
+function wrapToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  if (!text) return [""];
+  if (ctx.measureText(text).width <= maxWidth) return [text];
+
+  const lines: string[] = [];
+  let line = "";
+  for (const ch of text) {
+    const next = line + ch;
+    if (ctx.measureText(next).width > maxWidth && line) {
+      lines.push(line);
+      line = ch;
+    } else {
+      line = next;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
 /** 범례 띠 · 인쇄 경계선 · 미리보기 · 선택 표시 — 레이어 위에 얹는 것들. */
 function renderOverlays(
   ctx: CanvasRenderingContext2D,
@@ -601,6 +881,12 @@ function renderOverlays(
   band: number,
 ) {
   const { cell } = options;
+
+  // 인쇄물에 실릴 메모 본문을 미리 그려 둔다. 자리는 mm 로 재어 두었으므로
+  // 칸 크기(cellMm)로 나눠 화면 픽셀로 바꾼다.
+  if (options.printMemo && options.printMemo.pages.length > 0) {
+    drawMemoPreview(ctx, options.printMemo, cell);
+  }
 
   // 인쇄물에 함께 실릴 범례를 도면 아래에 미리 그려 둔다.
   if (options.printLegend && options.printLegend.items.length > 0 && band > 0) {
@@ -763,6 +1049,7 @@ export function renderSheet(
   visible: Record<LayerId, boolean>,
   legendList?: PaletteItem[],
   meta?: SheetMeta,
+  memoIndex?: Record<string, number>,
 ) {
   const items = legendList ?? legendItems(doc);
   const grid = docPixelSize(doc, cell);
@@ -780,7 +1067,7 @@ export function renderSheet(
 
   ctx.save();
   ctx.translate(SHEET_PADDING, SHEET_PADDING + SHEET_TITLE_HEIGHT);
-  renderDoc(ctx, doc, { cell, visible, showGrid: true });
+  renderDoc(ctx, doc, { cell, visible, showGrid: true, memoIndex });
   ctx.strokeStyle = GRID_LINE_STRONG;
   ctx.lineWidth = 1;
   ctx.strokeRect(0.5, 0.5, grid.width, grid.height);

@@ -13,6 +13,7 @@ import {
   defaultTiles,
   DESCRIPTION_MAX,
   isHexColor,
+  itemOpacity,
   NAME_MAX,
   NEW_ITEM_COLOR,
   type PaletteId,
@@ -20,6 +21,7 @@ import {
   type PaletteRole,
   roleMeta,
   ROLES,
+  sanitizeOpacity,
 } from "./palette";
 import {
   DEFAULT_LINE_STYLE,
@@ -40,6 +42,8 @@ export interface PaletteInput {
   pattern?: FillPattern;
   /** 선 모양. 없으면 실선. */
   lineStyle?: LineStyle;
+  /** 불투명도(0~1). 없거나 분류 기본값과 같으면 저장하지 않는다. */
+  opacity?: number;
 }
 
 /** 이름·색 검사. 문제가 없으면 null, 있으면 사용자에게 보일 한 줄. */
@@ -124,6 +128,8 @@ export function addPaletteEntry(
   // 배선은 칸을 채우지 않으므로 무늬를 받지 않는다.
   if (usesPattern(role) && input.pattern && input.pattern !== DEFAULT_PATTERN) created.pattern = input.pattern;
   if (input.lineStyle && input.lineStyle !== DEFAULT_LINE_STYLE) created.lineStyle = input.lineStyle;
+  const opacity = sanitizeOpacity(input.opacity);
+  if (opacity !== null && opacity !== itemOpacity({ role })) created.opacity = opacity;
 
   return { palette: [...palette, created], created };
 }
@@ -150,6 +156,10 @@ export function updatePaletteEntry(
     else delete next.pattern;
     if (input.lineStyle && input.lineStyle !== DEFAULT_LINE_STYLE) next.lineStyle = input.lineStyle;
     else delete next.lineStyle;
+
+    const opacity = sanitizeOpacity(input.opacity);
+    if (opacity !== null && opacity !== itemOpacity({ role: item.role })) next.opacity = opacity;
+    else delete next.opacity;
 
     return next;
   });
@@ -339,6 +349,9 @@ export function ensurePalette(raw: unknown): PaletteItem[] {
     if (usesPattern(candidate.role) && pattern && pattern !== DEFAULT_PATTERN) item.pattern = pattern;
     const lineStyle = sanitizeLineStyle(candidate.lineStyle);
     if (lineStyle && lineStyle !== DEFAULT_LINE_STYLE) item.lineStyle = lineStyle;
+    const opacity = sanitizeOpacity(candidate.opacity);
+    // 분류의 기본값과 같으면 저장하지 않는다 — 예전 문서와 파일 모양이 같아진다.
+    if (opacity !== null && opacity !== itemOpacity({ role: candidate.role })) item.opacity = opacity;
     if (candidate.retired === true) item.retired = true;
 
     seen.add(candidate.id);

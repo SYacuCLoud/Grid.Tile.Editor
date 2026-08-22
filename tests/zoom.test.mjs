@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { anchoredScreenPos, anchoredScroll, panScroll } from "../app/editor/zoom.ts";
+import { KEY_PAN_CELLS, anchoredScreenPos, anchoredScroll, keyPanScroll, panScroll } from "../app/editor/zoom.ts";
 import { ZOOM_STEPS } from "../app/editor/useEditor.ts";
 
 /** 스크롤 영역 왼쪽 위가 화면 (100, 80) 에 있고, 캔버스가 그 안에서 스크롤된 상태. */
@@ -101,4 +101,27 @@ test("가운데 버튼 화면 이동: 스크롤이 음수로 가지 않는다", 
 
   assert.equal(next.scrollLeft, 0);
   assert.equal(next.scrollTop, 0);
+});
+
+const box = { scrollLeft: 200, scrollTop: 150, clientWidth: 800, clientHeight: 600 };
+
+test("W/A/S/D 화면 이동: 칸 단위로 옮기고 배율을 따라간다", () => {
+  // D = 오른쪽으로 4칸(22px 배율 → 88px)
+  assert.deepEqual(keyPanScroll(box, { x: 1, y: 0 }, 22), { scrollLeft: 288, scrollTop: 150 });
+  // A = 왼쪽, W = 위, S = 아래
+  assert.deepEqual(keyPanScroll(box, { x: -1, y: 0 }, 22), { scrollLeft: 112, scrollTop: 150 });
+  assert.deepEqual(keyPanScroll(box, { x: 0, y: -1 }, 22), { scrollLeft: 200, scrollTop: 62 });
+  assert.deepEqual(keyPanScroll(box, { x: 0, y: 1 }, 22), { scrollLeft: 200, scrollTop: 238 });
+
+  // 배율이 두 배면 픽셀 걸음도 두 배 — 화면에서 옮겨 보이는 칸 수는 그대로다.
+  assert.equal(keyPanScroll(box, { x: 1, y: 0 }, 44).scrollLeft - box.scrollLeft, KEY_PAN_CELLS * 44);
+});
+
+test("W/A/S/D 화면 이동: Shift 는 한 화면씩, 스크롤은 음수로 가지 않는다", () => {
+  assert.deepEqual(keyPanScroll(box, { x: 1, y: 0 }, 22, true), { scrollLeft: 1000, scrollTop: 150 });
+  assert.deepEqual(keyPanScroll(box, { x: 0, y: 1 }, 22, true), { scrollLeft: 200, scrollTop: 750 });
+
+  // 왼쪽 위 끝에서 더 밀어도 0 에서 멈춘다.
+  const atEdge = { scrollLeft: 10, scrollTop: 5, clientWidth: 800, clientHeight: 600 };
+  assert.deepEqual(keyPanScroll(atEdge, { x: -1, y: -1 }, 22, true), { scrollLeft: 0, scrollTop: 0 });
 });

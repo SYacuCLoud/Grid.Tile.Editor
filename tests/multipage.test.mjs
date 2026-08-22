@@ -8,6 +8,7 @@ import {
   deletePageFromProject,
   paintCellsOnPage,
   renamePageInProject,
+  stepPageId,
   switchActivePage,
   updateEquipmentInfoOnPage,
 } from "../app/editor/doc.ts";
@@ -312,4 +313,33 @@ test("칸 정보: 우클릭 저장이 장비 ID 와 메모를 함께 넣는다",
   const bare = updateEquipmentInfoOnPage(page, "8,8", { label: "X-1", memo: "" });
   assert.equal(bare.equipment["8,8"].label, "X-1");
   assert.equal(updateEquipmentInfoOnPage(bare, "8,8", { label: "", memo: "" }).equipment["8,8"], undefined);
+});
+
+test("← / → 페이지 이동: 순서대로 옮기고 양끝에서 멈춘다", () => {
+  let project = createProject("페이지 이동");
+  project = addPageToProject(project);
+  project = addPageToProject(project);
+  assert.equal(project.pages.length, 3);
+
+  const [a, b, c] = project.pages.map((p) => p.id);
+
+  // 첫 페이지에서 왼쪽은 제자리 — 마지막으로 튀지 않는다.
+  project = switchActivePage(project, a);
+  assert.equal(stepPageId(project, -1), a);
+  assert.equal(stepPageId(project, 1), b);
+
+  // 가운데는 양쪽으로 움직인다.
+  project = switchActivePage(project, b);
+  assert.equal(stepPageId(project, -1), a);
+  assert.equal(stepPageId(project, 1), c);
+
+  // 마지막 페이지에서 오른쪽도 제자리.
+  project = switchActivePage(project, c);
+  assert.equal(stepPageId(project, 1), c);
+  assert.equal(stepPageId(project, -1), b);
+
+  // 페이지가 하나뿐이면 어느 쪽으로도 안 움직인다.
+  const single = createProject("혼자");
+  assert.equal(stepPageId(single, -1), single.pages[0].id);
+  assert.equal(stepPageId(single, 1), single.pages[0].id);
 });

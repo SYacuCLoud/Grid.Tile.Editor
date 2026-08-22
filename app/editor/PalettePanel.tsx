@@ -185,6 +185,7 @@ export function PalettePanel(props: PalettePanelProps) {
                           initialDescription={item.description ?? ""}
                           initialPattern={item.pattern}
                           initialLineStyle={item.lineStyle}
+                          initialOpacity={item.opacity}
                           submitLabel="저장"
                           onSubmit={(input) => {
                             const error = props.onUpdateItem(item.id, input);

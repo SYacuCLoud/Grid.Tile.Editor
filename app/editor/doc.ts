@@ -302,6 +302,19 @@ export function switchActivePage(project: ProjectDoc, pageId: string): ProjectDo
   };
 }
 
+/**
+ * 현재 페이지에서 `delta` 칸 떨어진 페이지 id.
+ *
+ * 양끝에서는 멈춘다(순환하지 않음). 방향키를 눌러 두다가 마지막 페이지에서
+ * 첫 페이지로 튀면 어디를 보고 있는지 놓친다.
+ */
+export function stepPageId(project: ProjectDoc, delta: number): string {
+  const found = project.pages.findIndex((p) => p.id === project.activePageId);
+  const from = found < 0 ? 0 : found;
+  const next = Math.min(project.pages.length - 1, Math.max(0, from + delta));
+  return project.pages[next].id;
+}
+
 export function isInside(doc: { cols: number; rows: number }, p: Point): boolean {
   return p.x >= 0 && p.y >= 0 && p.x < doc.cols && p.y < doc.rows;
 }

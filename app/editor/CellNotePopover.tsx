@@ -169,7 +169,6 @@ export function CellNotePopover(props: CellNotePopoverProps) {
         <input
           ref={labelRef}
           value={label}
-          placeholder="예: C1101"
           onChange={(event) => setLabel(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
@@ -186,7 +185,6 @@ export function CellNotePopover(props: CellNotePopoverProps) {
         메모
         <textarea
           value={memo}
-          placeholder="예: 3월 점검 대상, 배선 재작업 필요"
           onChange={(event) => setMemo(event.target.value)}
           onKeyDown={(event) => {
             // 줄바꿈은 Shift+Enter. Enter 는 저장이다.

@@ -94,7 +94,6 @@ export function ServerBar({ state, actions }: ServerBarProps) {
           className={`${FIELD} w-24`}
           value={state.author}
           maxLength={24}
-          placeholder="닉네임"
           onChange={(event) => actions.setAuthor(event.target.value)}
           aria-label="작성자 이름"
         />

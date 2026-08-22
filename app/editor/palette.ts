@@ -81,6 +81,14 @@ export interface PaletteItem {
    */
   lineStyle?: LineStyle;
   /**
+   * 불투명도(0~1). 없으면 분류의 기본값을 쓴다 — 배선은 반투명(`DEFAULT_WIRE_OPACITY`),
+   * 나머지는 불투명.
+   *
+   * 배선은 도면 위를 가로질러 지나가므로 진하게 깔면 아래의 배경·설비를 덮는다.
+   * 옅게 두면 경로는 읽히면서 그 아래 무엇이 있는지도 보인다.
+   */
+  opacity?: number;
+  /**
    * 팔레트 목록에서 감춘 항목. 사용 중인 항목을 삭제하면 이미 배치된 칸이
    * 깨지지 않도록 정의만 남긴다.
    */
@@ -204,4 +212,28 @@ export function textColorOn(background: string | undefined): string {
   if (!rgb) return "#101418";
   const luminance = (rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114) / 255;
   return luminance > 0.62 ? "#101418" : "#ffffff";
+}
+
+/**
+ * 배선의 기본 불투명도.
+ *
+ * 배선은 도면 위를 가로질러 지나간다. 진하게 깔면 그 아래의 배경·설비가 가려져
+ * "여기에 무엇이 있는데 선이 지나간다" 가 아니라 "여기는 선이다" 로만 읽힌다.
+ */
+export const DEFAULT_WIRE_OPACITY = 0.55;
+
+/** 불투명도를 고를 수 있는 눈금. 슬라이더보다 단추가 손이 덜 간다. */
+export const OPACITY_STEPS = [0.25, 0.4, 0.55, 0.7, 0.85, 1] as const;
+
+/** 저장된 값이 쓸 만한 불투명도일 때만 받는다. */
+export function sanitizeOpacity(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  if (raw <= 0 || raw > 1) return null;
+  // 소수점 둘째 자리까지만 남긴다 — 파일에 긴 소수가 쌓이지 않게.
+  return Math.round(raw * 100) / 100;
+}
+
+/** 이 항목을 그릴 때 쓸 불투명도. 지정이 없으면 분류의 기본값. */
+export function itemOpacity(item: { role: PaletteRole; opacity?: number }): number {
+  return item.opacity ?? (item.role === "wire" ? DEFAULT_WIRE_OPACITY : 1);
 }

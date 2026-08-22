@@ -8,6 +8,24 @@
 export type PaperId = "a4" | "a3" | "a2" | "letter";
 export type PaperOrientation = "portrait" | "landscape";
 
+/**
+ * 메모 본문을 어디에 실을지.
+ *
+ * - `off` — 싣지 않는다(기본). 도면에는 번호만 남는다.
+ * - `inline` — 용지의 빈 곳에 채우고, 넘치면 다음 장에 이어 붙인다.
+ * - `appendix` — 도면과 섞지 않고 뒤에 별지로 모은다.
+ *
+ * (자리 계산과 번호 매기기는 `memoPrint.ts`. 여기 두는 것은 용지 설정과 함께
+ * 저장되기 때문이다 — 저장 · 복원 경로를 새로 만들지 않는다.)
+ */
+export type MemoPrintMode = "off" | "inline" | "appendix";
+
+export const DEFAULT_MEMO_MODE: MemoPrintMode = "off";
+
+export function sanitizeMemoMode(raw: unknown): MemoPrintMode {
+  return raw === "inline" || raw === "appendix" ? raw : DEFAULT_MEMO_MODE;
+}
+
 export interface PaperMeta {
   id: PaperId;
   name: string;
@@ -30,6 +48,13 @@ export interface PagePaper {
   cellMm: number;
   /** 사방 여백(mm). */
   marginMm: number;
+  /**
+   * 메모 본문을 인쇄물에 실을지. 없으면 싣지 않는다(`off`).
+   *
+   * 도면 칸에는 언제나 메모 번호가 찍힌다 — 이 설정은 **본문**을 어디에 싣느냐만
+   * 정한다. `memoPrint.ts` 참고.
+   */
+  memoMode?: MemoPrintMode;
 }
 
 export const DEFAULT_CELL_MM = 5;
@@ -109,7 +134,16 @@ export function sanitizePaper(raw: unknown): PagePaper | null {
       ? Math.min(MAX_MARGIN_MM, Math.max(0, candidate.marginMm))
       : DEFAULT_MARGIN_MM;
 
-  return { id: candidate.id as PaperId, orientation, cellMm, marginMm };
+  const memoMode = sanitizeMemoMode(candidate.memoMode);
+
+  return {
+    id: candidate.id as PaperId,
+    orientation,
+    cellMm,
+    marginMm,
+    // 기본값은 저장하지 않는다 — 예전 파일과 같은 모양이 유지된다.
+    ...(memoMode === DEFAULT_MEMO_MODE ? {} : { memoMode }),
+  };
 }
 
 /**

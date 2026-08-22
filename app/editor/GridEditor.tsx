@@ -16,13 +16,30 @@ import { ServerBar } from "./server/ServerBar";
 import { useServerProjects } from "./server/useServerProjects";
 import { downloadPhotos, openPhotoLedger } from "./photoExport";
 import { collectPhotoEntries, ledgerSubtitle } from "./photoLedger";
-import { DEFAULT_PRINT_DPI, planPrint, printSheetSuffix, renderPrintSheet } from "./printSheet";
-import { anchoredScroll, panScroll, type ScrollAnchor, type WheelAnchor } from "./zoom";
+import { collectMemos, MEMO_LINE_MM, MEMO_TEXT_MM, planMemoPages } from "./memoPrint";
+import { DEFAULT_MEMO_MODE } from "./paper";
+import {
+  DEFAULT_PRINT_DPI,
+  lastSheetGrid,
+  planPrint,
+  printSheetSuffix,
+  renderMemoSheet,
+  renderPrintSheet,
+} from "./printSheet";
+import { anchoredScroll, keyPanScroll, panScroll, type ScrollAnchor, type WheelAnchor } from "./zoom";
 import { downloadCanvasPng, downloadJson, fileStamp, parseProjectJson, safeFileName } from "./storage";
 import { Toolbar } from "./Toolbar";
 import { useEditor } from "./useEditor";
 
 const PNG_SCALE = 2;
+
+/** W/A/S/D → 화면을 옮길 방향. */
+const PAN_KEYS: Record<string, { x: number; y: number }> = {
+  w: { x: 0, y: -1 },
+  a: { x: -1, y: 0 },
+  s: { x: 0, y: 1 },
+  d: { x: 1, y: 0 },
+};
 
 export function GridEditor() {
   const { state, actions } = useEditor();
@@ -99,6 +116,33 @@ export function GridEditor() {
     };
   }, []);
 
+  // W/A/S/D 로 화면 영역을 옮긴다(스크롤). 도구를 바꾸지 않고 도면을 둘러볼 수 있다.
+  // Shift 를 누르면 한 화면씩. 칸 메모 상자가 열려 있으면 쉰다 — 그 안은 글자 입력 자리다.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (state.noteKey) return;
+
+      const dir = PAN_KEYS[event.key.toLowerCase()];
+      if (!dir) return;
+
+      const box = scrollRef.current;
+      if (!box) return;
+
+      event.preventDefault();
+      const next = keyPanScroll(box, dir, state.cell, event.shiftKey);
+      box.scrollLeft = next.scrollLeft;
+      box.scrollTop = next.scrollTop;
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [state.cell, state.noteKey]);
+
   // 확대 배율이 바뀐 뒤, 굴리기 직전 커서 아래 있던 지점이 그대로 커서 밑에 오도록 스크롤을 옮긴다.
   // 이게 없으면 확대할 때마다 보던 자리가 왼쪽 위로 달아난다.
   useLayoutEffect(() => {
@@ -119,6 +163,15 @@ export function GridEditor() {
     () => legendItemsForPage(state.project.palette, state.activePageDoc),
     [state.activePageDoc, state.project.palette],
   );
+
+  // 메모는 번호를 매겨 둔다. 도면 칸에 찍는 번호와 인쇄물 본문이 같은 번호를
+  // 써야 하므로 한 곳에서 만든다. 메모를 인쇄하지 않아도 번호는 매긴다.
+  const memos = useMemo(() => collectMemos(state.doc), [state.doc]);
+  const memoIndex = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const entry of memos) map[entry.key] = entry.no;
+    return map;
+  }, [memos]);
 
   // 로컬 폴더(.grid-projects) 기반 공유. 서버가 없는 자리에서는 스스로 접힌다.
   // 워터마크에 리비전 · 작성자를 적으므로 내보내기보다 먼저 둔다.
@@ -141,17 +194,53 @@ export function GridEditor() {
     // 여러 장에 걸치면 장마다 파일을 나눈다. 화면 경계선과 장수·자리가 같다.
     if (paper) {
       const plan = planPrint(state.doc, paper, legend.length, DEFAULT_PRINT_DPI);
-      for (let index = 0; index < plan.total; index += 1) {
+      const memoMode = paper.memoMode ?? DEFAULT_MEMO_MODE;
+
+      // 메모 본문을 실을 자리를 미리 나눈다. `inline` 은 마지막 장의 빈 곳부터,
+      // `appendix` 는 별지부터 채운다.
+      const memoPages = planMemoPages(
+        memoMode,
+        memos,
+        paper,
+        memoMode === "inline" ? lastSheetGrid(state.doc, plan) : null,
+      );
+      const inlinePage = memoPages.find((page) => page.onGridSheet) ?? null;
+      const extraPages = memoPages.filter((page) => !page.onGridSheet);
+
+      const newCanvas = () => {
         const canvas = document.createElement("canvas");
         canvas.width = plan.pageWidth;
         canvas.height = plan.pageHeight;
+        return canvas;
+      };
 
+      for (let index = 0; index < plan.total; index += 1) {
+        const canvas = newCanvas();
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
-        renderPrintSheet(ctx, state.doc, plan, index, state.visible, legend, meta);
+        renderPrintSheet(ctx, state.doc, plan, index, state.visible, legend, meta, {
+          index: memoIndex,
+          page: inlinePage && inlinePage.gridSheetIndex === index ? inlinePage : null,
+        });
         downloadCanvasPng(canvas, `${base}-${printSheetSuffix(plan, index)}.png`);
       }
+
+      // 빈 곳에 못 담은 메모는 뒤에 장을 더 붙인다. 도면 장수와 이어지도록
+      // 파일 이름에 `메모N` 을 붙인다.
+      extraPages.forEach((page, order) => {
+        const canvas = newCanvas();
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const title =
+          extraPages.length > 1 ? `메모 (${order + 1}/${extraPages.length})` : "메모";
+        renderMemoSheet(ctx, page, plan, title, meta.title);
+        downloadCanvasPng(
+          canvas,
+          `${base}-${printSheetSuffix(plan, plan.total - 1)}-메모${order + 1}.png`,
+        );
+      });
       return;
     }
 
@@ -164,10 +253,12 @@ export function GridEditor() {
     if (!ctx) return;
 
     ctx.setTransform(PNG_SCALE, 0, 0, PNG_SCALE, 0, 0);
-    renderSheet(ctx, state.doc, state.cell, state.visible, legend, meta);
+    renderSheet(ctx, state.doc, state.cell, state.visible, legend, meta, memoIndex);
     downloadCanvasPng(canvas, `${base}.png`);
   }, [
     legend,
+    memoIndex,
+    memos,
     server.author,
     server.baseRevision,
     state.activePageDoc.name,
@@ -268,6 +359,43 @@ export function GridEditor() {
       columns: legendColumns(paper),
     };
   }, [legend, state.activePageDoc.paper]);
+
+  /**
+   * 인쇄물에 실릴 메모 본문의 자리. 경계선 안에 미리 그려 둔다.
+   *
+   * `inline` 은 도면 마지막 장의 빈 곳에 얹히므로 그 장의 좌상단 칸을 함께
+   * 넘긴다. `appendix` 는 도면 밖 별지라 화면 경계선에는 실을 자리가 없어
+   * 미리보기에서 뺀다 — 종이에서 도면 뒤에 따로 붙는다.
+   */
+  const printMemo = useMemo(() => {
+    const paper = state.activePageDoc.paper;
+    if (!paper) return null;
+    const memoMode = paper.memoMode ?? DEFAULT_MEMO_MODE;
+    if (memoMode !== "inline" || memos.length === 0) return null;
+
+    const plan = planPrint(state.doc, paper, legend.length, DEFAULT_PRINT_DPI);
+    const last = lastSheetGrid(state.doc, plan);
+    const inline = planMemoPages(memoMode, memos, paper, last).find((page) => page.onGridSheet);
+    if (!inline) return null;
+
+    return {
+      pages: [
+        {
+          block: inline.block,
+          entries: inline.entries,
+          // 이 장의 좌상단 칸. 도면이 여러 장이면 마지막 장으로 밀려 있다.
+          originCells: {
+            x: (last.index % plan.across) * plan.sheet.cols,
+            y: Math.floor(last.index / plan.across) * plan.sheet.rows,
+          },
+        },
+      ],
+      cellMm: paper.cellMm,
+      marginMm: paper.marginMm,
+      lineMm: MEMO_LINE_MM,
+      textMm: MEMO_TEXT_MM,
+    };
+  }, [legend.length, memos, state.activePageDoc.paper, state.doc]);
 
   // 눈금자는 캔버스와 같은 칸 수를 써야 도면과 어긋나지 않는다.
   // 인쇄 경계선을 켜면 캔버스가 용지 범위까지 넓어진다는 점까지 같이 본다.
@@ -376,6 +504,8 @@ export function GridEditor() {
             onWheelZoom={onWheelZoom}
             printGuide={printGuide}
             printLegend={printLegend}
+            memoIndex={memoIndex}
+            printMemo={printMemo}
             noteOpen={!!state.noteKey}
             onLeave={() => {
               actions.setHover(null);
@@ -414,6 +544,7 @@ export function GridEditor() {
           onSize={actions.setSize}
           paper={state.activePageDoc.paper}
           legendCount={legend.length}
+          memos={memos}
           onPaper={actions.setPaper}
           onPick={() => actions.setTool("pick")}
           onCopy={actions.copy}

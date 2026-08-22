@@ -8,6 +8,8 @@
 export function recordingContext() {
   const ops = [];
   const path = [];
+  /** 지금 경로에 쌓인 사각형. `fill()` 이 오면 칠로 기록된다. */
+  const rects = [];
   const stack = [];
   const state = {
     fillStyle: "",
@@ -108,8 +110,14 @@ export function recordingContext() {
     setTransform() {},
     beginPath() {
       path.length = 0;
+      rects.length = 0;
     },
-    rect: (x, y, w, h) => ops.push({ op: "rect", x, y, w, h }),
+    // 경로에 쌓아 두고 `fill()` 에서 한꺼번에 기록한다. 실제 캔버스도 그렇게
+    // 동작한다 — 겹쳐 담아도 칠은 한 겹이다.
+    rect: (x, y, w, h) => {
+      rects.push({ x, y, w, h });
+      ops.push({ op: "rect", x, y, w, h });
+    },
     clip: () => ops.push({ op: "clip" }),
     closePath() {},
     moveTo: (x, y) => path.push({ x, y }),
@@ -127,7 +135,28 @@ export function recordingContext() {
         });
       }
     },
-    fill() {},
+    /**
+     * 경로를 채운다.
+     *
+     * 경로에 담긴 사각형마다 `fillRect` 와 같은 op 를 남긴다 — 사각형 여러 개를
+     * 한 경로에 모아 한 번 채우는 그림을, 낱개로 채우던 예전 그림과 같은 눈으로
+     * 확인할 수 있어야 하기 때문이다. `filled: true` 로 갈라볼 수 있게 표시해 둔다.
+     */
+    fill() {
+      for (const r of rects) {
+        ops.push({
+          op: "fillRect",
+          filled: true,
+          color: state.fillStyle,
+          alpha: state.globalAlpha,
+          x: r.x,
+          y: r.y,
+          w: r.w,
+          h: r.h,
+        });
+      }
+      rects.length = 0;
+    },
     arc() {},
     setLineDash: (dash) => {
       state.lineDash = [...dash];

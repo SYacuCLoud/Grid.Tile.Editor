@@ -225,7 +225,6 @@ export function LayerAddForm(props: LayerAddFormProps) {
         이름
         <input
           value={name}
-          placeholder="예: 구역, 안전선"
           maxLength={LAYER_NAME_MAX}
           onChange={(event) => setName(event.target.value)}
           onKeyDown={(event) => {
@@ -263,7 +262,6 @@ export function LayerAddForm(props: LayerAddFormProps) {
         설명 (선택)
         <input
           value={hint}
-          placeholder="예: 작업 구역"
           maxLength={LAYER_HINT_MAX}
           onChange={(event) => setHint(event.target.value)}
           className={`mt-0.5 ${FIELD}`}

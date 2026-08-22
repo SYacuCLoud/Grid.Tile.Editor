@@ -19,6 +19,7 @@ import {
   type ProjectDoc,
   renamePageInProject,
   resizePage,
+  stepPageId,
   switchActivePage,
   updateActivePage,
   updateEquipmentInfoOnPage,
@@ -697,13 +698,30 @@ export function useEditor() {
     });
   }, []);
 
-  // 키보드 보조: Ctrl+Z 되돌리기, Ctrl+Y 다시 실행, Ctrl+C / Ctrl+X / Ctrl+V 클립보드
+  // 키보드 보조: Ctrl+Z 되돌리기, Ctrl+Y 다시 실행, Ctrl+C / Ctrl+X / Ctrl+V 클립보드,
+  // ← / → 페이지 이동
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
         return;
       }
+
+      // 방향키는 수식키 없이 쓴다. 칸 메모 상자(및 그 안의 사진 확대 보기)가
+      // 열려 있으면 그쪽이 ←/→ 를 쓰므로 페이지를 넘기지 않는다.
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && !noteKey) {
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          switchPage(stepPageId(project, -1));
+          return;
+        }
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          switchPage(stepPageId(project, 1));
+          return;
+        }
+      }
+
       if (!(event.ctrlKey || event.metaKey)) return;
 
       const key = event.key.toLowerCase();
@@ -727,7 +745,7 @@ export function useEditor() {
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [copy, cut, paste, redo, undo]);
+  }, [copy, cut, noteKey, paste, project, redo, switchPage, undo]);
 
   const state: EditorState = useMemo(
     () => ({

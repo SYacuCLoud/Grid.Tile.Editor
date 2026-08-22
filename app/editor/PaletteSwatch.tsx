@@ -1,6 +1,6 @@
 "use client";
 
-import type { PaletteItem } from "./palette";
+import { itemOpacity, type PaletteItem } from "./palette";
 import { borderStyleCss, patternCss } from "./pattern";
 
 const FALLBACK_COLOR = "#94a3b8";
@@ -20,6 +20,8 @@ interface PaletteSwatchProps {
  */
 export function PaletteSwatch({ item, size = 20 }: PaletteSwatchProps) {
   const color = item.color ?? FALLBACK_COLOR;
+  // 도면과 같은 진하기로 보여야 목록에서 고른 것이 도면과 같아 보인다.
+  const alpha = itemOpacity(item);
 
   // 배선은 칸을 채우지 않고 지나간다. 견본도 가로지르는 선으로 보인다.
   if (item.role === "wire") {
@@ -31,6 +33,7 @@ export function PaletteSwatch({ item, size = 20 }: PaletteSwatchProps) {
         <span
           style={{
             width: size,
+            opacity: alpha,
             borderTop: `${Math.max(2, Math.round(size * 0.34))}px ${borderStyleCss(item.lineStyle)} ${color}`,
           }}
         />
@@ -44,9 +47,16 @@ export function PaletteSwatch({ item, size = 20 }: PaletteSwatchProps) {
           width: size,
           height: size,
           background: "#ffffff",
+          opacity: alpha,
           border: `2px ${borderStyleCss(item.lineStyle)} ${color}`,
         }
-      : { width: size, height: size, ...patternCss(color, item.pattern), border: "1px solid #94a3b8" };
+      : {
+          width: size,
+          height: size,
+          opacity: alpha,
+          ...patternCss(color, item.pattern),
+          border: "1px solid #94a3b8",
+        };
 
   return <span className="shrink-0" style={style} />;
 }

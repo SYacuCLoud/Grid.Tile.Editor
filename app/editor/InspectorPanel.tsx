@@ -12,6 +12,7 @@ import {
   parseCellKey,
 } from "./doc";
 import { indexPalette, type PaletteItem, resolveItem } from "./palette";
+import type { MemoEntry } from "./memoPrint";
 import { legendLabel } from "./paletteOps";
 import { PaletteSwatch } from "./PaletteSwatch";
 import type { PagePaper } from "./paper";
@@ -35,6 +36,8 @@ interface InspectorPanelProps {
   paper: PagePaper | undefined;
   /** 인쇄물에 함께 실릴 범례 항목 수. 장수 계산에 쓴다. */
   legendCount: number;
+  /** 이 페이지의 메모. 번호는 이미 매겨져 있다. */
+  memos: MemoEntry[];
   onPaper: (paper: PagePaper | null) => void;
   onPick: () => void;
   onCopy: () => void;
@@ -76,7 +79,6 @@ function CellInfoForm({
         <input
           className={FIELD}
           value={label}
-          placeholder="예: C1101"
           onChange={(event) => setLabel(event.target.value)}
           onBlur={() => commit(label, memo)}
         />
@@ -87,7 +89,6 @@ function CellInfoForm({
         <textarea
           className="h-20 w-full resize-none border border-slate-300 bg-white px-2 py-1 text-[13px] text-slate-900 outline-none focus:border-slate-600"
           value={memo}
-          placeholder="예: 세척 투입구 리더, 3월 설치 예정"
           onChange={(event) => setMemo(event.target.value)}
           onBlur={() => commit(label, memo)}
         />
@@ -220,6 +221,8 @@ export function InspectorPanel(props: InspectorPanelProps) {
           cols={doc.cols}
           rows={doc.rows}
           legendCount={props.legendCount}
+          memos={props.memos}
+          memoCount={props.memos.length}
           onChange={props.onPaper}
         />
       </section>

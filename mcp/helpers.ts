@@ -68,7 +68,7 @@ export interface ProjectSummary {
   palette: Array<
     Pick<
       PaletteItem,
-      "id" | "name" | "role" | "layer" | "color" | "description" | "pattern" | "lineStyle" | "retired"
+      "id" | "name" | "role" | "layer" | "color" | "description" | "pattern" | "lineStyle" | "opacity" | "retired"
     >
   >;
 }
@@ -88,6 +88,7 @@ export function summarizeProject(project: ProjectDoc): ProjectSummary {
       description: item.description,
       pattern: item.pattern,
       lineStyle: item.lineStyle,
+      opacity: item.opacity,
       retired: item.retired,
     })),
   };

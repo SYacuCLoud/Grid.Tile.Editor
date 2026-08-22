@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createProject } from "../app/editor/doc.ts";
 import { addPaletteEntry, ensurePalette, updatePaletteEntry } from "../app/editor/paletteOps.ts";
+import { DEFAULT_WIRE_OPACITY } from "../app/editor/palette.ts";
 import {
   dashArray,
   fillCellPattern,
@@ -12,7 +13,7 @@ import {
   sanitizeLineStyle,
   sanitizePattern,
 } from "../app/editor/pattern.ts";
-import { renderDoc, renderSheet } from "../app/editor/render.ts";
+import { LABEL_BG, LABEL_BG_TEXT, renderDoc, renderSheet } from "../app/editor/render.ts";
 import { legendItemsForProject } from "../app/editor/paletteOps.ts";
 import { sanitizeProject } from "../app/editor/storage.ts";
 import { recordingContext, VISIBLE } from "./recording-context.mjs";
@@ -296,8 +297,11 @@ test("배선 무늬: 배선은 무늬를 쓰지 않는다 — 저장 파일에 �
   renderDoc(ctx, layout(project), { cell: CELL, visible: VISIBLE, showGrid: false });
 
   // 무늬 줄을 긋지 않고 예전처럼 띠로만 채운다.
+  // (배선은 이제 기본이 반투명이므로 띠의 알파는 1 이 아니다.)
   assert.equal(ctx.ops.filter((op) => op.op === "stroke" && op.color === "#7c3aed").length, 0);
-  assert.ok(ctx.ops.some((op) => op.op === "fillRect" && op.color === "#7c3aed" && op.alpha === 1));
+  const band = ctx.ops.find((op) => op.op === "fillRect" && op.color === "#7c3aed");
+  assert.ok(band, "배선 띠를 그리지 않았다");
+  assert.equal(band.alpha, DEFAULT_WIRE_OPACITY, "배선이 기본 진하기로 그려지지 않았다");
 });
 
 test("배선 무늬: 팔레트에 넣어도 저장되지 않는다", () => {
@@ -374,27 +378,77 @@ test("배선 점선: 모퉁이에는 매듭을 채워 끊겨 보이지 않게 �
   assert.ok(knot, "모퉁이 칸에는 매듭이 있어야 한다");
 });
 
-test("글자 시인성: 밝은 바탕이든 어두운 바탕이든 반대색 테두리를 두른다", () => {
+test("글자 시인성: 장비 이름은 바탕과 반대색 테두리를 두른다", () => {
   const project = createProject("글자 대비");
   const page = project.pages[0];
   // 밝은 노랑(미연결) 위에는 검은 글자 + 흰 테두리.
-  page.equipment["1,1"] = { status: "unlinked", label: "C1" };
+  page.equipment["1,1"] = { status: "unlinked", kind: "reader" };
   // 어두운 파랑(기존 장비) 위에는 흰 글자 + 검은 테두리.
-  page.equipment["3,1"] = { status: "existing", label: "C2" };
+  page.equipment["3,1"] = { status: "existing", kind: "sensor" };
 
   const ctx = recordingContext();
   renderDoc(ctx, layout(project), { cell: 32, visible: VISIBLE, showGrid: false });
 
   const halo = (text) => ctx.ops.find((op) => op.op === "strokeText" && op.text === text);
-  assert.ok(halo("C1"), "글자마다 테두리를 먼저 그린다");
-  assert.ok(halo("C1").color.includes("255, 255, 255"));
-  assert.ok(halo("C2").color.includes("16, 20, 24"));
-  assert.ok(halo("C1").lineWidth > 0);
+  assert.ok(halo("리더"), "글자마다 테두리를 먼저 그린다");
+  assert.ok(halo("리더").color.includes("255, 255, 255"));
+  assert.ok(halo("센서").color.includes("16, 20, 24"));
+  assert.ok(halo("리더").lineWidth > 0);
 
   // 테두리를 그린 뒤에 글자를 채운다. 순서가 뒤집히면 글자가 가려진다.
-  const strokeAt = ctx.ops.findIndex((op) => op.op === "strokeText" && op.text === "C1");
-  const fillAt = ctx.ops.findIndex((op) => op.op === "fillText" && op.text === "C1");
+  const strokeAt = ctx.ops.findIndex((op) => op.op === "strokeText" && op.text === "리더");
+  const fillAt = ctx.ops.findIndex((op) => op.op === "fillText" && op.text === "리더");
   assert.ok(strokeAt < fillAt);
+});
+
+test("장비 ID: 글자 뒤에 형광펜 배경을 깔고 테두리는 두르지 않는다", () => {
+  const project = createProject("ID 배경");
+  const page = project.pages[0];
+  // 밝은 바탕 · 어두운 바탕 · 상태 없는 칸 — 어디서나 같은 형광펜을 쓴다.
+  page.equipment["1,1"] = { status: "unlinked", label: "C1" };
+  page.equipment["3,1"] = { status: "existing", label: "C2" };
+  page.equipment["5,1"] = { label: "C3" };
+
+  const ctx = recordingContext();
+  renderDoc(ctx, layout(project), { cell: 32, visible: VISIBLE, showGrid: false });
+
+  for (const id of ["C1", "C2", "C3"]) {
+    // 배경을 깔았으므로 테두리는 없다 — 둘을 함께 쓰면 뭉개진다.
+    assert.equal(
+      ctx.ops.find((op) => op.op === "strokeText" && op.text === id),
+      undefined,
+      `${id} 에 배경과 테두리를 함께 그렸다`,
+    );
+
+    const at = ctx.ops.findIndex((op) => op.op === "fillText" && op.text === id);
+    assert.ok(at > 0, `${id} 를 그리지 않았다`);
+
+    // 글자 바로 앞에 형광펜 사각형이 깔려 있어야 한다.
+    const bg = ctx.ops[at - 1];
+    assert.equal(bg.op, "fillRect", `${id} 글자 앞에 배경이 없다`);
+    assert.equal(bg.color, LABEL_BG, `${id} 배경색이 형광펜이 아니다`);
+    assert.ok(bg.w > 0 && bg.h > 0);
+  }
+
+  // 형광펜은 상태색·배경 타일과 뚜렷이 달라야 한다. 겹치면 "이 칸의 상태" 로 읽힌다.
+  const rgb = (c) => [1, 3, 5].map((i) => Number.parseInt(c.slice(i, i + 2), 16));
+  const gap = (a, b) => {
+    const [ar, ag, ab] = rgb(a);
+    const [br, bg2, bb] = rgb(b);
+    return Math.hypot(ar - br, ag - bg2, ab - bb);
+  };
+
+  const statusColors = project.palette.filter((i) => i.role === "status").map((i) => i.color);
+  const tileColors = project.palette.filter((i) => i.role === "tile").map((i) => i.color);
+
+  for (const color of statusColors) {
+    assert.ok(gap(LABEL_BG, color) > 140, `형광펜이 상태색 ${color} 과 너무 가깝다`);
+  }
+  for (const color of tileColors) {
+    assert.ok(gap(LABEL_BG, color) > 100, `형광펜이 배경 타일 ${color} 과 너무 가깝다`);
+  }
+  // 글자는 형광펜 위에서 읽혀야 한다.
+  assert.ok(gap(LABEL_BG, LABEL_BG_TEXT) > 150, "형광펜 위의 글자색이 흐리다");
 });
 
 test("글자 시인성: 무늬 칸 위의 장비 이름에도 테두리가 붙는다", () => {

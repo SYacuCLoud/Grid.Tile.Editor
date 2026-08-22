@@ -45,7 +45,9 @@ export function PageTabs(props: PageTabsProps) {
 
   return (
     <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-300 bg-slate-100 px-3 py-1.5 text-[13px]">
-      <span className="mr-1 text-[11px] font-semibold text-slate-500">페이지:</span>
+      <span className="mr-1 text-[11px] font-semibold text-slate-500" title="← / → 페이지 이동, W/A/S/D 화면 이동(Shift 는 한 화면씩)">
+        페이지:
+      </span>
 
       <div className="flex items-center gap-1.5">
         {pages.map((page) => {

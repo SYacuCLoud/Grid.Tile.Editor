@@ -63,3 +63,26 @@ export function panScroll(
     scrollTop: Math.max(0, start.scrollTop - (clientY - start.clientY)),
   };
 }
+
+/** W/A/S/D 한 번에 옮길 화면량(칸 수). 배율을 곱해 쓴다. */
+export const KEY_PAN_CELLS = 4;
+
+/**
+ * W/A/S/D 로 화면을 옮긴 뒤의 스크롤 위치.
+ *
+ * 걸음은 픽셀이 아니라 칸 단위다 — 확대해도 "네 칸 옮긴다"가 유지된다.
+ * Shift 를 누르면 한 화면씩 뛴다.
+ */
+export function keyPanScroll(
+  box: { scrollLeft: number; scrollTop: number; clientWidth: number; clientHeight: number },
+  dir: { x: number; y: number },
+  cell: number,
+  page = false,
+): { scrollLeft: number; scrollTop: number } {
+  const stepX = page ? box.clientWidth : KEY_PAN_CELLS * cell;
+  const stepY = page ? box.clientHeight : KEY_PAN_CELLS * cell;
+  return {
+    scrollLeft: Math.max(0, box.scrollLeft + dir.x * stepX),
+    scrollTop: Math.max(0, box.scrollTop + dir.y * stepY),
+  };
+}
