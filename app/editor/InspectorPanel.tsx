@@ -19,6 +19,7 @@ import type { PagePaper } from "./paper";
 import { PaperForm } from "./PaperForm";
 
 import { type CellRange } from "./range";
+import { type Zone, zoneLabel } from "./zone";
 
 const FIELD = "h-8 w-full border border-slate-300 bg-white px-2 text-[13px] text-slate-900 outline-none focus:border-slate-600";
 const SUB_BUTTON = "h-8 w-full border border-slate-300 bg-white text-[13px] text-slate-700 hover:bg-slate-100 disabled:opacity-40";
@@ -39,6 +40,9 @@ interface InspectorPanelProps {
   /** 이 페이지의 메모. 번호는 이미 매겨져 있다. */
   memos: MemoEntry[];
   onPaper: (paper: PagePaper | null) => void;
+  /** 활성 페이지의 구역. 칸을 골랐을 때 그 칸이 드는 구역 이름을 보여 주는 데만 쓴다.
+   *  구역을 만들고 고치는 일은 도면 우클릭이 맡는다 — 손이 캔버스에 있을 때 끝난다. */
+  zones: Zone[];
   onPick: () => void;
   onCopy: () => void;
   onCut: () => void;
@@ -50,17 +54,21 @@ function CellInfoForm({
   doc,
   cellKeyValue,
   cell,
+  zones,
   onInfo,
 }: {
   doc: LayoutDoc;
   cellKeyValue: string;
   cell: EquipmentCell | undefined;
+  zones: Zone[];
   onInfo: InspectorPanelProps["onInfo"];
 }) {
   const [label, setLabel] = useState(cell?.label ?? "");
   const [memo, setMemo] = useState(cell?.memo ?? "");
   const position = parseCellKey(cellKeyValue);
   const index = indexPalette(doc.palette);
+  // 이 칸이 드는 구역. 좌표보다 사람이 부르는 이름이 먼저 읽힌다.
+  const zoneText = zoneLabel(zones, position.x, position.y);
 
   const commit = (nextLabel: string, nextMemo: string) => {
     onInfo(cellKeyValue, { label: nextLabel.trim(), memo: nextMemo });
@@ -68,6 +76,7 @@ function CellInfoForm({
 
   return (
     <div className="flex flex-col gap-2">
+      {zoneText ? <p className="text-[12px] font-medium text-slate-900">{zoneText}</p> : null}
       <p className="text-[12px] text-slate-600">
         가로 {position.x + 1} · 세로 {position.y + 1}
         {cell?.status ? ` · ${resolveItem(index, cell.status, "status").name}` : ""}
@@ -199,6 +208,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
             doc={doc}
             cellKeyValue={selectedKey}
             cell={cell}
+            zones={props.zones}
             onInfo={props.onInfo}
           />
         ) : (

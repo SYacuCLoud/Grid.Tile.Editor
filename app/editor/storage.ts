@@ -3,6 +3,7 @@ import { type LayerDef, sanitizeLayers } from "./layers";
 import { ensurePalette } from "./paletteOps";
 import { type PagePaper, sanitizePaper } from "./paper";
 import { sanitizePhotos } from "./photo";
+import { sanitizeZones } from "./zone";
 
 /**
  * 예전 판이 도면을 자동 저장해 두던 브라우저 열쇠.
@@ -80,11 +81,14 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
   if (Array.isArray(raw.pages) && raw.pages.length > 0) {
     const pages: PageDoc[] = raw.pages.map((p, idx) => {
       const rawPage = (p && typeof p === "object" ? p : {}) as Partial<PageDoc>;
+      const cols = typeof rawPage.cols === "number" ? Math.max(10, Math.min(200, rawPage.cols)) : 48;
+      const rows = typeof rawPage.rows === "number" ? Math.max(10, Math.min(200, rawPage.rows)) : 30;
+      const zones = sanitizeZones(rawPage.zones, cols, rows);
       return {
         id: typeof rawPage.id === "string" ? rawPage.id : `page-${idx + 1}`,
         name: typeof rawPage.name === "string" ? rawPage.name : `페이지 ${idx + 1}`,
-        cols: typeof rawPage.cols === "number" ? Math.max(10, Math.min(200, rawPage.cols)) : 48,
-        rows: typeof rawPage.rows === "number" ? Math.max(10, Math.min(200, rawPage.rows)) : 30,
+        cols,
+        rows,
         background: (rawPage.background ?? {}) as PageDoc["background"],
         equipment: sanitizeEquipment(rawPage.equipment),
         wiring: (rawPage.wiring ?? {}) as PageDoc["wiring"],
@@ -92,6 +96,8 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
           ? { layerCells: sanitizeLayerCells(rawPage.layerCells, layers) as LayerCells }
           : {}),
         ...(sanitizePaper(rawPage.paper) ? { paper: sanitizePaper(rawPage.paper) as PagePaper } : {}),
+        ...(zones ? { zones } : {}),
+        ...(rawPage.zonesHidden === true ? { zonesHidden: true as const } : {}),
       };
     });
 

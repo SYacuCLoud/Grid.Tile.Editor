@@ -64,6 +64,8 @@ import {
   pasteClipboard,
 } from "./range";
 import type { PagePaper } from "./paper";
+import type { Zone } from "./zone";
+import { contextMenuFor, moveZoneLabel, ZONE_LAYER_ID, zoneLabelAt } from "./zone";
 import { createSampleProject } from "./sample";
 import { floodFillPoints, linePoints, rectFillPoints, rectOutlinePoints } from "./shapes";
 import { clearLocal } from "./storage";
@@ -95,7 +97,21 @@ interface History {
   future: ProjectDoc[];
 }
 
+/**
+ * 우클릭으로 열린 구역 상자의 자리와 할 일.
+ *
+ * 좌표(`x`,`y`)는 상자를 띄울 칸이고, `mode` 는 만들지 고칠지다. 고치는 경우
+ * 구역 자체를 담지 않고 ID만 담는다 — 목록이 바뀌어도 상자가 낡은 값을 들고
+ * 있지 않게 하려는 것이다.
+ */
+export interface ZonePopoverState {
+  x: number;
+  y: number;
+  mode: { kind: "create"; rect: { x: number; y: number; w: number; h: number } } | { kind: "edit"; zoneId: string };
+}
+
 export interface EditorState {
+
   project: ProjectDoc;
   activePageDoc: PageDoc;
   doc: LayoutDoc;
@@ -116,6 +132,13 @@ export interface EditorState {
   selectedKey: string | null;
   /** 메모 편집 상자를 열어 둔 칸. 없으면 null. */
   noteKey: string | null;
+  /**
+   * 구역 상자를 열어 둔 자리. 없으면 null.
+   *
+   * `noteKey` 와 함께 켜지지 않는다 — 우클릭 하나가 둘 중 하나만 연다.
+   */
+  zonePopover: ZonePopoverState | null;
+
   selectionRange: CellRange | null;
   clipboard: ClipboardData | null;
   hover: Point | null;
@@ -174,6 +197,8 @@ export function useEditor() {
   const [cell, setCell] = useState(22);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [noteKey, setNoteKey] = useState<string | null>(null);
+  const [zonePopover, setZonePopover] = useState<ZonePopoverState | null>(null);
+
   const [selectionRange, setSelectionRange] = useState<CellRange | null>(null);
   const [clipboard, setClipboard] = useState<ClipboardData | null>(null);
   const [hover, setHover] = useState<Point | null>(null);
@@ -185,12 +210,25 @@ export function useEditor() {
 
   // 표시 여부는 레이어 정의 한 곳에만 적힌다. 화면 상태로 따로 들고 있으면
   // 문서를 갈아 끼울 때(불러오기 · 되돌리기) 반드시 갈라진다.
-  const visible = useMemo(() => visibleMap(project.layers), [project.layers]);
+  // 구역은 `LayerDef` 목록에 없으므로 표시 맵에 직접 얹는다. 렌더러·팔레트 패널이
+  // 레이어와 같은 방식으로 읽을 수 있게 하려는 것이다.
+  const visible = useMemo(() => {
+    const map = visibleMap(project.layers);
+    map[ZONE_LAYER_ID] = activePageDoc.zonesHidden !== true;
+    return map;
+  }, [activePageDoc.zonesHidden, project.layers]);
   const activeLayerDef = useMemo(() => layerById(project.layers, activeLayer) ?? null, [activeLayer, project.layers]);
   const layerLocked = activeLayerDef?.locked === true;
 
   const dragStart = useRef<Point | null>(null);
   const dragging = useRef(false);
+  /**
+   * 지금 끌고 있는 구역 이름표의 ID. 끌지 않으면 null.
+   *
+   * 상태가 아니라 ref 다 — 끄는 동안 매 칸마다 다시 그릴 필요가 없고, 값이 바뀔
+   * 때마다 `beginStroke`/`moveStroke` 가 새로 만들어지면 끌기가 끊긴다.
+   */
+  const draggingLabel = useRef<string | null>(null);
 
   const activeItem = useMemo(
     () => project.palette.find((item) => item.id === activeId) ?? null,
@@ -297,6 +335,19 @@ export function useEditor() {
       setNoteKey(null);
 
       if (tool === "pick") {
+        // 이름표를 누르면 범위 선택 대신 그 이름표를 끈다. 선택 도구에서만 잡는다 —
+        // 칠하는 도구에서 이름표가 잡히면 구역 위에는 칠할 수 없게 된다.
+        // 구역을 숨겨 둔 동안은 잡지 않는다: 보이지 않는 것을 끌 수는 없다.
+        const label = activePageDoc.zonesHidden
+          ? null
+          : zoneLabelAt(activePageDoc.zones, p.x, p.y);
+        if (label) {
+          dragging.current = true;
+          dragStart.current = p;
+          draggingLabel.current = label.id;
+          return;
+        }
+
         dragging.current = true;
         dragStart.current = p;
         const range = normalizeRange(p, p, doc);
@@ -328,7 +379,16 @@ export function useEditor() {
         setPreview([p]);
       }
     },
-    [activeItem, activeLayer, applyEdit, doc, tool, writePointsOnPage],
+    [
+      activeItem,
+      activeLayer,
+      activePageDoc.zones,
+      activePageDoc.zonesHidden,
+      applyEdit,
+      doc,
+      tool,
+      writePointsOnPage,
+    ],
   );
 
   const moveStroke = useCallback(
@@ -337,6 +397,18 @@ export function useEditor() {
       if (!dragging.current || !dragStart.current) return;
 
       if (tool === "pick") {
+        // 이름표를 끌고 있으면 칸 단위로 따라 옮긴다. 미리보기가 아니라 바로 옮긴다 —
+        // 이름표는 한 칸이라 어디로 갈지 미리 보여 줄 것이 없다.
+        if (draggingLabel.current) {
+          const id = draggingLabel.current;
+          applyLive((current) =>
+            updateActivePage(current, (page) =>
+              page.zones ? { ...page, zones: moveZoneLabel(page.zones, id, p.x, p.y) } : page,
+            ),
+          );
+          return;
+        }
+
         const range = normalizeRange(dragStart.current, p, doc);
         setSelectionRange(range);
         setSelectedKey(cellKey(range.minX, range.minY));
@@ -366,6 +438,21 @@ export function useEditor() {
       dragStart.current = null;
 
       if (tool === "pick") {
+        // 이름표 끌기를 마친다. 옮긴 자리를 되돌리기 이력에 한 단계로 남긴다 —
+        // 끄는 동안의 매 칸이 아니라 놓은 자리 하나가 사용자가 되돌리려는 것이다.
+        if (draggingLabel.current) {
+          const id = draggingLabel.current;
+          draggingLabel.current = null;
+          if (p) {
+            applyEdit((current) =>
+              updateActivePage(current, (page) =>
+                page.zones ? { ...page, zones: moveZoneLabel(page.zones, id, p.x, p.y) } : page,
+              ),
+            );
+          }
+          return;
+        }
+
         if (from && p) {
           const range = normalizeRange(from, p, doc);
           setSelectionRange(range);
@@ -412,12 +499,45 @@ export function useEditor() {
     setTool("pick");
   }, [applyEdit, clipboard, doc, project.layers, selectedKey, selectionRange]);
 
-  /** 칸 우클릭 — 그 자리에서 메모를 고치게 한다. 도구는 바꾸지 않는다. */
-  const openNote = useCallback((p: Point) => {
-    setNoteKey(cellKey(p.x, p.y));
-  }, []);
+  /**
+   * 칸 우클릭 — 손이 방금 한 일에 따라 갈린다(`contextMenuFor`).
+   *
+   * 잡아 둔 범위 안이면 구역 등록, 구역 위면 그 구역 고치기, 그 밖은 칸 메모다.
+   * 도구는 바꾸지 않는다. 두 상자가 함께 뜨지 않게 반대쪽은 반드시 닫는다.
+   */
+  const openNote = useCallback(
+    (p: Point) => {
+      const picked = contextMenuFor(p, selectionRange, activePageDoc.zones);
+
+      if (picked.kind === "create") {
+        setNoteKey(null);
+        setZonePopover({ x: p.x, y: p.y, mode: { kind: "create", rect: picked.rect } });
+        return;
+      }
+      if (picked.kind === "zone") {
+        setNoteKey(null);
+        setZonePopover({ x: p.x, y: p.y, mode: { kind: "edit", zoneId: picked.zone.id } });
+        return;
+      }
+
+      setZonePopover(null);
+      setNoteKey(cellKey(p.x, p.y));
+    },
+    [activePageDoc.zones, selectionRange],
+  );
 
   const closeNote = useCallback(() => setNoteKey(null), []);
+
+  const closeZonePopover = useCallback(() => setZonePopover(null), []);
+
+  /** 구역 상자에서 칸 메모로 건너간다. 구역이 도면을 덮어도 메모로 갈 길이 남는다. */
+  const zonePopoverToNote = useCallback(() => {
+    setZonePopover((current) => {
+      if (current) setNoteKey(cellKey(current.x, current.y));
+      return null;
+    });
+  }, []);
+
 
   /** 장비 ID · 메모 · 사진을 함께 바꾼다. 같은 칸의 상태·장비는 건드리지 않는다. */
   const saveNote = useCallback(
@@ -475,8 +595,68 @@ export function useEditor() {
     [applyEdit],
   );
 
-  const replaceProject = useCallback(
-    (next: ProjectDoc) => {
+  /**
+   * 활성 페이지의 구역을 갈아 끼운다. 빈 목록이면 필드를 아예 비운다 —
+   * 저장 파일이 예전 판과 같은 모양으로 남는다.
+   */
+  const setZones = useCallback(
+    (zones: Zone[]) => {
+      applyEdit((current) =>
+        updateActivePage(current, (page) => {
+          if (zones.length === 0) {
+            if (!page.zones) return page;
+            const next = { ...page };
+            delete next.zones;
+            return next;
+          }
+          return { ...page, zones };
+        }),
+      );
+    },
+    [applyEdit],
+  );
+
+  /**
+   * 구역 전체를 도면에서 감춘다/보인다(레이어 눈 아이콘).
+   *
+   * 구역은 진짜 레이어가 아니라 `toggleLayerFlag` 가 닿지 않는다 — 페이지 필드로
+   * 따로 둔다. 되돌리기 이력에 남긴다: 눈을 껐다 켜는 것도 사용자가 되돌리고 싶은
+   * 조작이고, 레이어의 숨김도 같은 이력에 쌓인다.
+   */
+  const toggleZonesHidden = useCallback(() => {
+    applyEdit((current) =>
+      updateActivePage(current, (page) => {
+        if (page.zonesHidden) {
+          const next = { ...page };
+          delete next.zonesHidden;
+          return next;
+        }
+        return { ...page, zonesHidden: true as const };
+      }),
+    );
+  }, [applyEdit]);
+
+  /** 구역 하나를 범례에 올릴지 말지 뒤집는다. 도면의 테두리·이름표는 그대로 남는다. */
+  const toggleZoneLegend = useCallback(
+    (id: string) => {
+      applyEdit((current) =>
+        updateActivePage(current, (page) => {
+          if (!page.zones) return page;
+          const zones = page.zones.map((zone) => {
+            if (zone.id !== id) return zone;
+            const next = { ...zone };
+            if (next.hideLegend) delete next.hideLegend;
+            else next.hideLegend = true;
+            return next;
+          });
+          return { ...page, zones };
+        }),
+      );
+    },
+    [applyEdit],
+  );
+
+  const replaceProject = useCallback(    (next: ProjectDoc) => {
       applyEdit(() => next);
       setSelectedKey(null);
       setSelectionRange(null);
@@ -709,7 +889,8 @@ export function useEditor() {
 
       // 방향키는 수식키 없이 쓴다. 칸 메모 상자(및 그 안의 사진 확대 보기)가
       // 열려 있으면 그쪽이 ←/→ 를 쓰므로 페이지를 넘기지 않는다.
-      if (!event.ctrlKey && !event.metaKey && !event.altKey && !noteKey) {
+      // 구역 상자도 같다 — 페이지가 바뀌면 상자가 다른 페이지의 구역을 들고 남는다.
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && !noteKey && !zonePopover) {
         if (event.key === "ArrowLeft") {
           event.preventDefault();
           switchPage(stepPageId(project, -1));
@@ -745,7 +926,7 @@ export function useEditor() {
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [copy, cut, noteKey, paste, project, redo, switchPage, undo]);
+  }, [copy, cut, noteKey, paste, project, redo, switchPage, undo, zonePopover]);
 
   const state: EditorState = useMemo(
     () => ({
@@ -764,6 +945,7 @@ export function useEditor() {
       cell,
       selectedKey,
       noteKey,
+      zonePopover,
       selectionRange,
       clipboard,
       hover,
@@ -785,6 +967,7 @@ export function useEditor() {
       history.past.length,
       hover,
       noteKey,
+      zonePopover,
       preview,
       project,
       selectedKey,
@@ -825,6 +1008,9 @@ export function useEditor() {
       setTitle,
       setSize,
       setPaper,
+      setZones,
+      toggleZonesHidden,
+      toggleZoneLegend,
       replaceProject,
       resetAll,
       loadSample,
@@ -832,6 +1018,9 @@ export function useEditor() {
       setSelectionRange,
       openNote,
       closeNote,
+      closeZonePopover,
+      zonePopoverToNote,
+
       saveNote,
       addPage,
       renamePage,

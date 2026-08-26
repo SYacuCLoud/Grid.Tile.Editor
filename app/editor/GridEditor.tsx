@@ -30,8 +30,13 @@ import { anchoredScroll, keyPanScroll, panScroll, type ScrollAnchor, type WheelA
 import { downloadCanvasPng, downloadJson, fileStamp, parseProjectJson, safeFileName } from "./storage";
 import { Toolbar } from "./Toolbar";
 import { useEditor } from "./useEditor";
+import type { Zone } from "./zone";
+import { ZONE_LAYER_ID, zoneLabelAt, zoneLegendEntries } from "./zone";
+import { ZonePopover } from "./ZonePopover";
 
 const PNG_SCALE = 2;
+/** 구역이 없는 페이지가 매 렌더마다 새 배열을 만들지 않게 한 개를 돌려 쓴다. */
+const EMPTY_ZONES: Zone[] = [];
 
 /** W/A/S/D → 화면을 옮길 방향. */
 const PAN_KEYS: Record<string, { x: number; y: number }> = {
@@ -125,7 +130,9 @@ export function GridEditor() {
         return;
       }
       if (event.ctrlKey || event.metaKey || event.altKey) return;
-      if (state.noteKey) return;
+      // 상자가 열려 있으면 도면을 옮기지 않는다 — 상자는 그 자리에 붙어 있어서
+      // 도면만 움직이면 상자가 엉뚱한 칸을 가리킨다.
+      if (state.noteKey || state.zonePopover) return;
 
       const dir = PAN_KEYS[event.key.toLowerCase()];
       if (!dir) return;
@@ -141,7 +148,7 @@ export function GridEditor() {
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.cell, state.noteKey]);
+  }, [state.cell, state.noteKey, state.zonePopover]);
 
   // 확대 배율이 바뀐 뒤, 굴리기 직전 커서 아래 있던 지점이 그대로 커서 밑에 오도록 스크롤을 옮긴다.
   // 이게 없으면 확대할 때마다 보던 자리가 왼쪽 위로 달아난다.
@@ -159,10 +166,16 @@ export function GridEditor() {
 
   // 범례는 **보고 있는 페이지에서 실제로 쓴 항목**만 담는다. 팔레트는 프로젝트 공용이라
   // 다른 페이지에서만 쓰는 항목까지 넣으면 범례 띠가 길어지고 인쇄 자리를 잡아먹는다.
-  const legend = useMemo(
-    () => legendItemsForPage(state.project.palette, state.activePageDoc),
-    [state.activePageDoc, state.project.palette],
-  );
+  //
+  // 구역은 팔레트 항목이 아니지만 범례에는 함께 올라온다 — 도면을 처음 보는 사람은
+  // "이 색 테두리가 무엇인가" 를 팔레트와 구역으로 나눠 묻지 않는다. 팔레트 항목
+  // 뒤에 붙여 한 목록으로 읽게 한다. 눈 아이콘으로 구역을 껐으면 범례에서도 빠진다.
+  const legend = useMemo(() => {
+    const items = legendItemsForPage(state.project.palette, state.activePageDoc);
+    if (state.visible[ZONE_LAYER_ID] === false) return items;
+    return [...items, ...zoneLegendEntries(state.activePageDoc.zones)];
+  }, [state.activePageDoc, state.project.palette, state.visible]);
+
 
   // 메모는 번호를 매겨 둔다. 도면 칸에 찍는 번호와 인쇄물 본문이 같은 번호를
   // 써야 하므로 한 곳에서 만든다. 메모를 인쇄하지 않아도 번호는 매긴다.
@@ -323,6 +336,8 @@ export function GridEditor() {
   }, [actions]);
 
   // 우클릭으로 연 메모 상자에 넘길 정보 — 칸 위치와 그 칸에 무엇이 놓여 있는지.
+  const zones = state.activePageDoc.zones ?? EMPTY_ZONES;
+
   const noteCell = state.noteKey
     ? {
         key: state.noteKey,
@@ -342,6 +357,24 @@ export function GridEditor() {
         .filter(Boolean)
         .join(" · ")
     : "";
+
+  /**
+   * 우클릭으로 연 구역 상자에 넘길 정보.
+   *
+   * 상태는 구역 ID만 들고 있으므로 여기서 지금의 목록에서 다시 찾는다 — 그 사이
+   * 되돌리기 등으로 구역이 사라졌다면 상자를 그리지 않는다(낡은 값을 고치지 않게).
+   */
+  const zoneEdit = (() => {
+    const open = state.zonePopover;
+    if (!open) return null;
+    const mode = open.mode;
+    if (mode.kind === "create") {
+      return { x: open.x, y: open.y, mode: { kind: "create" as const, rect: mode.rect } };
+    }
+    const zone = zones.find((item) => item.id === mode.zoneId);
+    if (!zone) return null;
+    return { x: open.x, y: open.y, mode: { kind: "edit" as const, zone } };
+  })();
 
   // 인쇄 경계선은 화면에서만 그린다. PNG 내보내기에는 넘기지 않는다.
   const printGuide = useMemo(
@@ -404,7 +437,21 @@ export function GridEditor() {
     [printGuide, printLegend?.bandCells, state.doc],
   );
 
-  const cursor = state.tool === "pick" ? "pointer" : state.tool === "eraser" ? "cell" : "crosshair";
+  // 선택 도구에서 이름표 위에 오면 커서를 바꾼다 — 끌 수 있다는 표시가 없으면
+  // 이름표를 옮길 수 있다는 것을 아무도 모른다.
+  const overZoneLabel =
+    state.tool === "pick" &&
+    state.hover !== null &&
+    state.visible[ZONE_LAYER_ID] !== false &&
+    zoneLabelAt(state.activePageDoc.zones, state.hover.x, state.hover.y) !== null;
+
+  const cursor = overZoneLabel
+    ? "grab"
+    : state.tool === "pick"
+      ? "pointer"
+      : state.tool === "eraser"
+        ? "cell"
+        : "crosshair";
   const activeItem = state.tool === "eraser" ? null : state.activeItem;
 
   return (
@@ -469,6 +516,9 @@ export function GridEditor() {
           onAddItem={actions.addPaletteItem}
           onUpdateItem={actions.updatePaletteItem}
           onDeleteItem={actions.deletePaletteItem}
+          zones={zones}
+          onToggleZones={actions.toggleZonesHidden}
+          onToggleZoneLegend={actions.toggleZoneLegend}
         />
 
         <main ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-slate-200 p-4">
@@ -506,7 +556,7 @@ export function GridEditor() {
             printLegend={printLegend}
             memoIndex={memoIndex}
             printMemo={printMemo}
-            noteOpen={!!state.noteKey}
+            noteOpen={!!state.noteKey || !!state.zonePopover}
             onLeave={() => {
               actions.setHover(null);
               actions.endStroke(null);
@@ -530,6 +580,22 @@ export function GridEditor() {
                 onClose={actions.closeNote}
               />
             ) : null}
+
+            {zoneEdit ? (
+              <ZonePopover
+                key={`zone-${zoneEdit.x},${zoneEdit.y}`}
+                x={zoneEdit.x}
+                y={zoneEdit.y}
+                cell={state.cell}
+                cols={state.doc.cols}
+                rows={state.doc.rows}
+                zones={zones}
+                mode={zoneEdit.mode}
+                onChange={actions.setZones}
+                onNote={actions.zonePopoverToNote}
+                onClose={actions.closeZonePopover}
+              />
+            ) : null}
             </GridCanvas>
           </div>
         </main>
@@ -546,6 +612,7 @@ export function GridEditor() {
           legendCount={legend.length}
           memos={memos}
           onPaper={actions.setPaper}
+          zones={zones}
           onPick={() => actions.setTool("pick")}
           onCopy={actions.copy}
           onCut={actions.cut}

@@ -14,6 +14,7 @@ import { legendItems, legendLabel } from "./paletteOps";
 import { dashArray, fillCellPattern } from "./pattern";
 import { type CellRange } from "./range";
 import { type SheetMeta, watermarkText } from "./watermark";
+import { DEFAULT_ZONE_COLOR, type Zone, ZONE_LAYER_ID, zoneLabelCell } from "./zone";
 
 export interface RenderOptions {
   cell: number;
@@ -85,6 +86,13 @@ const MIN_FONT_PX = 6;
 const HALO_RATIO = 0.3;
 /** 가로로 눌러도 읽을 수 있는 한계. 이보다 납작하면 글자가 뭉갠다. */
 const MIN_SCALE_X = 0.55;
+
+/** 구역 테두리 굵기. 격자선(1px)보다 굵어야 구역으로 읽힌다. */
+const ZONE_LINE_WIDTH = 2.5;
+/** 구역 이름표 안쪽 여백(px). */
+const ZONE_LABEL_PAD = 4;
+/** 이 배율 아래에서는 이름표를 접는다 — 칸보다 이름표가 커진다. */
+const ZONE_LABEL_MIN_CELL = 14;
 
 function fontFor(px: number): string {
   return `${px}px "Segoe UI", "Malgun Gothic", system-ui, sans-serif`;
@@ -872,6 +880,65 @@ function wrapToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: numb
   return lines;
 }
 
+/**
+ * 구역 테두리와 이름표.
+ *
+ * 칸을 채우지 않는다 — 아래 깔린 임색·무늬가 그대로 보여야 한다. 대신 테두리를
+ * 굵게 두르고 왼쪽 위에 이름을 붙인다. 이름표는 구역 안쪽으로 넣는다: 도면 위쪽
+ * 첫 줄에 있는 구역도 이름이 캔버스 밖으로 나가지 않는다.
+ *
+ * 큰 구역을 먼저 그려 작은 구역의 이름표가 위에 남는다 — 겹칠 때 좁게 부르는
+ * 이름이 가려지지 않게.
+ */
+function drawZones(ctx: CanvasRenderingContext2D, zones: Zone[], cell: number) {
+  const ordered = [...zones].sort((a, b) => b.w * b.h - a.w * a.h);
+
+  ctx.save();
+  for (const zone of ordered) {
+    const color = zone.color ?? DEFAULT_ZONE_COLOR;
+    const x = zone.x * cell;
+    const y = zone.y * cell;
+    const w = zone.w * cell;
+    const h = zone.h * cell;
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = ZONE_LINE_WIDTH;
+    ctx.setLineDash([]);
+    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+
+    if (cell < ZONE_LABEL_MIN_CELL) continue;
+
+    const size = Math.max(9, Math.round(cell * 0.42));
+    ctx.font = boldFontFor(size);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+
+    // 이름표가 얹히는 칸. 사용자가 끌어 옮긴 자리이고, 옮기지 않았으면 왼쪽 위다.
+    // 끌기 판정과 같은 함수를 쓴다 — 각자 계산하면 눌러도 안 잡히는 이름표가 생긴다.
+    const spot = zoneLabelCell(zone);
+    const lx = spot.x * cell;
+    const ly = spot.y * cell;
+
+    // 자리는 이름표 칸부터 구역 오른쪽 끝까지다. 이름을 옮길 수 있으므로 넘치면
+    // 사용자가 왼쪽으로 끌어 피할 수 있다 — 그래서 여기서는 넘칠 때만 줄인다.
+    const room = x + w - lx - ZONE_LABEL_PAD * 2 - 4;
+    if (room < size) continue;
+    const text =
+      ctx.measureText(zone.name).width <= room ? zone.name : ellipsize(ctx, zone.name, room);
+
+    const textWidth = ctx.measureText(text).width;
+    const boxW = textWidth + ZONE_LABEL_PAD * 2;
+    const boxH = size + ZONE_LABEL_PAD;
+
+    ctx.fillStyle = color;
+    ctx.fillRect(lx + 2, ly + 2, boxW, boxH);
+
+    ctx.fillStyle = textColorOn(color);
+    ctx.fillText(text, lx + 2 + ZONE_LABEL_PAD, ly + 2 + boxH / 2 + 0.5);
+  }
+  ctx.restore();
+}
+
 /** 범례 띠 · 인쇄 경계선 · 미리보기 · 선택 표시 — 레이어 위에 얹는 것들. */
 function renderOverlays(
   ctx: CanvasRenderingContext2D,
@@ -915,6 +982,17 @@ function renderOverlays(
     });
 
     ctx.restore();
+  }
+
+  // 구역 — 칸 범위에 붙인 이름. 칸을 채우지 않고 테두리와 왼쪽 위 이름표만
+  // 얹는다. 임색을 가리지 않으려는 것이다. 겹치면 둘 다 그려진다.
+  //
+  // 끄는 길이 둘이다: 문서에 저장된 `zonesHidden`(눈 아이콘) 과 표시 맵의
+  // `visible["zones"]`. 둘 중 하나라도 끔이면 그리지 않는다 — PNG·인쇄처럼
+  // 표시 맵만 넘기는 경로와, 문서만 넘기는 경로가 모두 있기 때문이다.
+  const zonesOff = doc.zonesHidden === true || options.visible[ZONE_LAYER_ID] === false;
+  if (doc.zones && doc.zones.length > 0 && !zonesOff) {
+    drawZones(ctx, doc.zones, cell);
   }
 
   // 인쇄 경계선 — 큰 도면이 어디서 잘려 다음 장으로 넘어가는지 보여 준다.

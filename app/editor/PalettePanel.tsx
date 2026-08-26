@@ -10,6 +10,7 @@ import { type CollapseKey, expandCollapsed, isCollapsed, loadCollapsed, saveColl
 import { PaletteDeleteConfirm } from "./PaletteDeleteConfirm";
 import { PaletteItemForm } from "./PaletteItemForm";
 import { PaletteSwatch } from "./PaletteSwatch";
+import { type Zone, ZONE_LAYER_ID, zoneArea, zoneLegendItems } from "./zone";
 
 const MINI_BUTTON =
   "h-6 shrink-0 border border-slate-200 bg-white px-1.5 text-[11px] text-slate-600 hover:border-slate-400 hover:text-slate-900";
@@ -41,6 +42,12 @@ interface PalettePanelProps {
   onAddItem: (role: PaletteRole, input: PaletteInput, layerId?: string) => string | null;
   onUpdateItem: (id: PaletteId, input: PaletteInput) => string | null;
   onDeleteItem: (id: PaletteId, mode: DeleteMode) => void;
+  /** 활성 페이지의 구역. 레이어 목록 맨 위에 한 줄로 붙는다. */
+  zones: Zone[];
+  /** 구역 하나의 범례 표시를 켜고 끈다. */
+  onToggleZoneLegend: (id: string) => void;
+  /** 구역 전체를 도면에서 감춘다/보인다. 레이어가 아니라 별도 핸들러다. */
+  onToggleZones: () => void;
 }
 
 export function PalettePanel(props: PalettePanelProps) {
@@ -89,6 +96,68 @@ export function PalettePanel(props: PalettePanelProps) {
         </div>
         {mode?.kind === "addLayer" ? <LayerAddForm onSubmit={props.onAddLayer} onCancel={close} /> : null}
       </div>
+
+      {/*
+        구역 줄.
+
+        진짜 레이어가 아니라서 `LayerRow` 를 쓰지 않는다 — 구역은 칸에 칠하는 것이
+        아니라 범위에 붙인 이름이라 이름 변경·순서·비우기·삭제가 모두 뜻이 다르다.
+        여기서 주는 것은 둘뿐이다: 도면에 그릴지(눈), 구역별로 범례에 올릴지.
+
+        맨 위에 두는 이유는 구역이 다른 레이어 위에 그려지기 때문이다 — 목록 순서와
+        그리는 순서가 어긋나면 사용자가 순서를 잘못 읽는다.
+      */}
+      {props.zones.length > 0 ? (
+        <section>
+          <div className="mb-1 flex items-center justify-between gap-1">
+            <span className="min-w-0 flex-1 text-left text-[12px] font-semibold text-slate-500">
+              <span className="truncate">구역</span>
+              <span className="ml-1 font-normal text-slate-400">범위 이름</span>
+            </span>
+            <button
+              type="button"
+              className={props.visible[ZONE_LAYER_ID] === false ? MINI_BUTTON : `${MINI_BUTTON} border-slate-400 text-slate-900`}
+              onClick={props.onToggleZones}
+              title={props.visible[ZONE_LAYER_ID] === false ? "구역 보이기" : "구역 숨기기 — 도면과 범례에서 함께 빠진다"}
+              aria-label="구역 표시"
+              aria-pressed={props.visible[ZONE_LAYER_ID] !== false}
+            >
+              {props.visible[ZONE_LAYER_ID] === false ? "🚫" : "👁"}
+            </button>
+          </div>
+
+          {/* 구역별 범례 온오프. 켠 것만 범례에 오른다 — 작은 구역까지 올라오면
+              범례가 도면보다 길어진다. 도면 테두리·이름표는 여기서 끄지 않는다. */}
+          <ul className="flex flex-col gap-1">
+            {props.zones.map((zone) => {
+              const onLegend = zone.hideLegend !== true;
+              return (
+                <li key={zone.id} className="flex items-center gap-1 border border-slate-200 bg-white px-1 py-1">
+                  <span
+                    className="h-3.5 w-3.5 shrink-0 border border-slate-300"
+                    style={{ backgroundColor: zone.color ?? "#7c3aed" }}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-slate-700">{zone.name}</span>
+                  <span className="shrink-0 text-[10px] text-slate-400">{zoneArea(zone)}칸</span>
+                  <button
+                    type="button"
+                    className={onLegend ? `${MINI_BUTTON} border-slate-400 text-slate-900` : MINI_BUTTON}
+                    onClick={() => props.onToggleZoneLegend(zone.id)}
+                    title={onLegend ? `'${zone.name}' 을 범례에서 뺀다` : `'${zone.name}' 을 범례에 올린다`}
+                    aria-pressed={onLegend}
+                  >
+                    범례
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+
+          <p className="mt-1 text-[10px] text-slate-400">
+            범례에 {zoneLegendItems(props.zones).length} / {props.zones.length}개
+          </p>
+        </section>
+      ) : null}
 
       {layers.map((layer, indexFromTop) => (
         <section key={layer.id}>

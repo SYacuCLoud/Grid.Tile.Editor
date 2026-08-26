@@ -10,6 +10,8 @@ import {
   type WireId,
 } from "./palette";
 import type { PagePaper } from "./paper";
+import type { Zone } from "./zone";
+import { sanitizeZones } from "./zone";
 
 export const DOC_VERSION = 3;
 export const MIN_COLS = 10;
@@ -64,6 +66,19 @@ export interface PageDoc {
    * 격자 칸 수와 PNG 내보내기에는 영향을 주지 않는다.
    */
   paper?: PagePaper;
+  /**
+   * 칸 범위에 붙인 이름(구역). 없으면 필드를 두지 않는다 — 예전 판 문서와
+   * 같은 모양이 유지된다. 겹쳐도 되고, 도면 칸은 가리지 않는다(`zone.ts`).
+   */
+  zones?: Zone[];
+  /**
+   * 구역을 도면에 그리지 않는다(레이어 눈 아이콘을 끈 상태).
+   *
+   * 레이어의 `hidden` 과 같은 성격이라 문서에 남긴다 — 도면을 다시 열었을 때
+   * 껐던 것이 켜져 있으면 사용자는 자기가 끈 적이 없다고 여긴다. 켤 때만 필드를
+   * 둬서 대부분의 문서는 예전과 같은 모양으로 남는다.
+   */
+  zonesHidden?: true;
 }
 
 export interface ProjectDoc {
@@ -89,6 +104,10 @@ export interface LayoutDoc {
   layerCells?: LayerCells;
   layers: LayerDef[];
   palette: PaletteItem[];
+  /** 활성 페이지의 구역. 렌더러가 테두리와 이름표를 그린다. */
+  zones?: Zone[];
+  /** 구역을 그리지 않는다. 렌더러는 `visible["zones"]` 로도 같은 판정을 받는다. */
+  zonesHidden?: true;
 }
 
 /** 칸을 담고 있는 것 — `PageDoc` 과 `LayoutDoc` 이 모두 만족한다. */
@@ -221,6 +240,8 @@ export function activeLayoutDoc(project: ProjectDoc): LayoutDoc {
     equipment: page.equipment,
     wiring: page.wiring,
     ...(page.layerCells ? { layerCells: page.layerCells } : {}),
+    ...(page.zones ? { zones: page.zones } : {}),
+    ...(page.zonesHidden ? { zonesHidden: true as const } : {}),
     layers: project.layers,
     palette: project.palette,
   };
@@ -510,6 +531,14 @@ export function resizePage(page: PageDoc, cols: number, rows: number): PageDoc {
     }
     if (Object.keys(layerCells).length > 0) next.layerCells = layerCells;
     else delete next.layerCells;
+  }
+
+  // 구역도 같은 자로 자른다. 격자 밖으로 온전히 나간 구역은 사라지고, 걸친
+  // 구역은 안쪽으로 잘려 이름이 남는다(`sanitizeZones`).
+  if (page.zones) {
+    const zones = sanitizeZones(page.zones, nextCols, nextRows);
+    if (zones) next.zones = zones;
+    else delete next.zones;
   }
 
   return next;
