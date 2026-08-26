@@ -76,8 +76,20 @@ export function memoKey(x: number, y: number): string {
  * 인쇄 치수로 잡는다 — 화면 배율을 바꿔도 몇 장에 걸치는지가 달라지면 안 된다.
  */
 export const MEMO_LINE_MM = 3.6;
-/** 메모 한 칸(항목)의 최소 너비. 이보다 좁으면 번호와 본문이 붙어 읽히지 않는다. */
+/**
+ * 메모 한 열의 **알맞은** 너비. 넓은 자리에서 몇 열로 나눌지 셀 때 쓴다.
+ *
+ * 이보다 좁아도 읽을 수는 있다 — 자리가 좁을 때의 하한은 `MEMO_COL_MIN_MM`.
+ */
 export const MEMO_COL_MM = 60;
+/**
+ * 메모 한 열의 **최소** 너비.
+ *
+ * 이 값이 따로 있는 이유: 오른쪽에 55mm 가 남았는데 알맞은 너비(60mm)를 요구하면
+ * 자리를 포기하고 별지로 넘어간다. 종이 오른쪽이 눈에 보이게 비어 있는데 메모가
+ * 따로 인쇄되면 사용자는 자리를 낭비했다고 느낀다. 좁아도 쓰는 편이 낫다.
+ */
+export const MEMO_COL_MIN_MM = 32;
 /** 도면과 메모 사이 숨 자리. */
 export const MEMO_GAP_MM = 4;
 /** 본문 글자 크기(mm). 현장에서 들고 읽을 수 있는 하한이다. */
@@ -155,6 +167,7 @@ export function memoBlockOnSheet(
     if (room <= 0) continue;
 
     if (pick.bottom) {
+      // 아래는 폭이 인쇄영역 전체라 열 수만 정하면 된다.
       const columns = Math.max(1, Math.floor(usableW / MEMO_COL_MM));
       const linesPerColumn = Math.floor(room / MEMO_LINE_MM);
       if (linesPerColumn < MEMO_MIN_LINES) continue;
@@ -169,8 +182,10 @@ export function memoBlockOnSheet(
       };
     }
 
-    const columns = Math.floor(room / MEMO_COL_MM);
-    if (columns < 1) continue;
+    const columns = Math.max(1, Math.floor(room / MEMO_COL_MM));
+    // 알맞은 너비가 안 되어도 최소 너비만 넘으면 쓴다. 종이 오른쪽이 눈에 띄게
+    // 비어 있는데 메모를 별지로 보내면 자리를 버린 것처럼 보인다.
+    if (room < MEMO_COL_MIN_MM) continue;
     const linesPerColumn = Math.floor(usableH / MEMO_LINE_MM);
     if (linesPerColumn < MEMO_MIN_LINES) continue;
     return {

@@ -4,6 +4,10 @@ import { createProject } from "../app/editor/doc.ts";
 import { defaultPaper, sanitizeMemoMode, sanitizePaper, sheetCells } from "../app/editor/paper.ts";
 import {
   collectMemos,
+  MEMO_COL_MIN_MM,
+  MEMO_GAP_MM,
+  MEMO_LINE_MM,
+  MEMO_TEXT_MM,
   memoBlockOnBlankSheet,
   memoBlockOnSheet,
   memoLineCount,
@@ -271,6 +275,156 @@ test("빈 장 자리: 인쇄영역을 칸 경계까지 쓴다", () => {
   assert.equal(odd.widthMm % 6, 0, "폭이 칸 경계에 맞지 않는다");
   assert.equal(odd.heightMm % 6, 0, "높이가 칸 경계에 맞지 않는다");
   assert.ok(odd.widthMm <= 190 && odd.heightMm <= 277);
+});
+
+/**
+ * 남은 자리가 좁아도 쓰는지.
+ *
+ * 이 테스트가 잡은 버그: 오른쪽 자리를 열 하나의 **알맞은** 너비(60mm)로 재던 탓에
+ * 55~60mm 가 남았는데도 자리를 포기하고 메모를 별지로 보냈다. 종이 오른쪽이 눈에
+ * 보이게 비어 있는데 메모가 따로 인쇄되면 자리를 버린 셈이다.
+ */
+test("메모 자리: 오른쪽이 좁아도 남으면 쓴다 (별지로 넘기지 않는다)", () => {
+  const paper = { ...defaultPaper("a4"), orientation: "landscape", cellMm: 5, marginMm: 10 };
+  // 인쇄영역 폭 275mm. 격자를 넓혀 오른쪽 자리를 조금씩 줄인다.
+  // 도면과의 숨 자리(4mm)를 빼고도 최소 너비(32mm)가 남는 데까지가 오른쪽을 쓴다.
+  const cases = [
+    { cols: 40, leftMm: 75 },
+    { cols: 43, leftMm: 60 },
+    { cols: 44, leftMm: 55 },
+    { cols: 46, leftMm: 45 },
+    { cols: 47, leftMm: 40 },
+  ];
+
+  for (const item of cases) {
+    const doc = { cols: item.cols, rows: 25 };
+    const plan = planPrint(doc, paper, 8);
+    const last = lastSheetGrid(doc, plan);
+    const block = memoBlockOnSheet(paper, last.gridCols, last.gridRows, last.bandCells);
+
+    assert.ok(block, `격자 ${item.cols}칸: 오른쪽 ${item.leftMm}mm 남는데 자리를 포기했다`);
+
+    // 오른쪽을 썼는지 확인 — 격자 오른쪽에서 시작해야 한다.
+    const gridRightMm = paper.marginMm + last.gridCols * paper.cellMm;
+    assert.ok(
+      block.xMm >= gridRightMm,
+      `격자 ${item.cols}칸: 메모가 격자와 겹친다 (x${block.xMm} < ${gridRightMm})`,
+    );
+    assert.ok(block.columns >= 1);
+    // 좁아도 최소 너비는 지킨다 — 번호와 본문이 붙으면 읽을 수 없다.
+    assert.ok(
+      block.widthMm >= MEMO_COL_MIN_MM - MEMO_GAP_MM,
+      `격자 ${item.cols}칸: 너비 ${block.widthMm}mm 가 하한보다 좁다`,
+    );
+  }
+
+  // 최소 너비 아래로 좁아지면 그때는 포기한다 — 억지로 쓰면 못 읽는다.
+  const tight = { cols: 49, rows: 25 };
+  const tightPlan = planPrint(tight, paper, 8);
+  const tightLast = lastSheetGrid(tight, tightPlan);
+  const rightMm = 275 - tightLast.gridCols * paper.cellMm - MEMO_GAP_MM;
+  assert.ok(rightMm < MEMO_COL_MIN_MM, `이 경우가 좁지 않다 (${rightMm}mm)`);
+
+  const block = memoBlockOnSheet(paper, tightLast.gridCols, tightLast.gridRows, tightLast.bandCells);
+  if (block) {
+    // 오른쪽이 좁으면 아래로 내려가야 한다 — 오른쪽에 억지로 밀어넣지 않는다.
+    const gridRightMm = paper.marginMm + tightLast.gridCols * paper.cellMm;
+    assert.ok(block.xMm < gridRightMm, "좁은 오른쪽에 억지로 넣었다");
+  }
+});
+
+/**
+ * 화면 미리보기가 메모를 자리 안에 담는지.
+ *
+ * 이 테스트가 잡은 버그: 줄 수를 **어림**(글자 수)으로 세어 자리를 잡으면서 글자는
+ * **실제 폭**으로 접었다. 둘이 다르면 항목이 서로 겹치거나 자리를 넘어가 잘린다.
+ * 지금은 그리기 직전에 실제로 접어 보고 그 줄 수로 자리를 잡는다.
+ */
+test("메모 미리보기: 글자가 자리 안에 담긴다 (어림과 실제가 어긋나지 않는다)", () => {
+  const paper = { ...defaultPaper("a4"), orientation: "landscape", cellMm: 5, marginMm: 10 };
+  const doc = { cols: 40, rows: 25 };
+
+  const project = createProject("미리보기");
+  const page = project.pages[0];
+  // 길이가 제각각인 메모 — 어림과 실제가 어긋나기 쉬운 조합.
+  const memos = [
+    "짧다",
+    "점검 항목 확인 필요한 조금 긴 메모 본문입니다",
+    "WWWWWWWWWWWWWWWWWWWW",
+    "iiiiiiiiiiiiiiiiiiiiiiiiiiiiii",
+    "줄바꿈이\n들어간\n메모",
+    "가".repeat(120),
+  ];
+  memos.forEach((memo, i) => {
+    page.equipment[`${i + 1},1`] = { memo };
+  });
+
+  const entries = collectMemos(page);
+  const plan = planPrint(doc, paper, 0);
+  const last = lastSheetGrid(doc, plan);
+  const block = memoBlockOnSheet(paper, last.gridCols, last.gridRows, last.bandCells);
+  assert.ok(block, "메모 자리가 없다");
+
+  const cell = 22;
+  const spanPx = (mm) => (mm / paper.cellMm) * cell;
+  const size = spanPx(MEMO_TEXT_MM);
+  const lineH = spanPx(MEMO_LINE_MM);
+  const width = spanPx(block.widthMm);
+  const height = spanPx(block.heightMm);
+  const columnW = width / Math.max(1, block.columns);
+
+  // 그리기와 같은 셈으로 글자를 접어 본다. 대역 캔버스의 글자 폭은
+  // `recordingContext` 와 같은 규칙(글꼴 크기 비례)을 쓴다.
+  const measure = (text) => text.length * size * 0.55;
+  const wrap = (text, room) => {
+    if (!text) return [""];
+    if (measure(text) <= room) return [text];
+    const out = [];
+    let line = "";
+    for (const ch of text) {
+      if (measure(line + ch) > room && line) {
+        out.push(line);
+        line = ch;
+      } else {
+        line += ch;
+      }
+    }
+    if (line) out.push(line);
+    return out;
+  };
+
+  let column = 0;
+  let used = 0;
+  let drawn = 0;
+
+  for (const entry of entries) {
+    const headW = measure(`${entry.no}. `);
+    const room = columnW - headW - 2;
+    const lines = entry.memo.split(/\r?\n/).flatMap((p) => wrap(p, room));
+    const need = lines.length + 1;
+
+    if (used + need > block.linesPerColumn && column + 1 < block.columns) {
+      column += 1;
+      used = 0;
+    }
+
+    const x = column * columnW;
+    const yTop = used * lineH;
+    const yBottom = yTop + lines.length * lineH;
+
+    // 모든 글자가 자리 안에 들어가야 한다 — 넘으면 clip 에 잘린다.
+    assert.ok(x + columnW <= width + 1e-9, `${entry.no}번: 열이 자리 오른쪽을 넘는다`);
+    assert.ok(
+      yBottom <= height + 1e-9,
+      `${entry.no}번: 글자가 자리 아래를 ${(yBottom - height).toFixed(1)}px 넘는다`,
+    );
+
+    used += need;
+    drawn += 1;
+    if (used >= block.linesPerColumn && column + 1 >= block.columns) break;
+  }
+
+  assert.equal(drawn, entries.length, `${entries.length}건 중 ${drawn}건만 담겼다`);
 });
 
 test("설정 저장: 기본값(off)은 파일에 남기지 않는다", () => {
