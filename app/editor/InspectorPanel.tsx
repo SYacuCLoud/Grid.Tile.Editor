@@ -11,6 +11,7 @@ import {
   MIN_ROWS,
   parseCellKey,
 } from "./doc";
+import { type Device, deviceById, deviceLabel } from "./device";
 import { indexPalette, type PaletteItem, resolveItem } from "./palette";
 import type { MemoEntry } from "./memoPrint";
 import { legendLabel } from "./paletteOps";
@@ -31,7 +32,9 @@ interface InspectorPanelProps {
   /** 프로젝트 전체 기준으로 고른 범례 항목. */
   legend: PaletteItem[];
   hasClipboard: boolean;
-  onInfo: (key: string, patch: { label?: string; memo?: string }) => void;
+  /** 프로젝트의 장치 대장. 칸을 골랐을 때 연결된 장치 한 줄을 보여 주는 데만 쓴다.
+   *  등록·연결·수정은 칸 우클릭이 맡는다 — 손이 캔버스에 있을 때 끝난다. */
+  devices: Device[];
   onSize: (cols: number, rows: number) => void;
   /** 활성 페이지의 인쇄 용지 설정. */
   paper: PagePaper | undefined;
@@ -49,71 +52,41 @@ interface InspectorPanelProps {
   onPaste: () => void;
 }
 
-/** 선택한 칸의 장비 ID · 메모. 선택이 바뀌면 key 로 새로 마운트된다. */
-function CellInfoForm({
+/**
+ * 선택한 칸의 요약 한 눈. 편집은 여기서 하지 않는다 — 장비 ID · 메모 · 장치
+ * 등록은 칸 우클릭 상자가 맡는다. 요약이 두 곳에서 편집되면 서로 어긋난다.
+ */
+function CellInfoView({
   doc,
   cellKeyValue,
   cell,
   zones,
-  onInfo,
+  devices,
 }: {
   doc: LayoutDoc;
   cellKeyValue: string;
   cell: EquipmentCell | undefined;
   zones: Zone[];
-  onInfo: InspectorPanelProps["onInfo"];
+  devices: Device[];
 }) {
-  const [label, setLabel] = useState(cell?.label ?? "");
-  const [memo, setMemo] = useState(cell?.memo ?? "");
   const position = parseCellKey(cellKeyValue);
   const index = indexPalette(doc.palette);
   // 이 칸이 드는 구역. 좌표보다 사람이 부르는 이름이 먼저 읽힌다.
   const zoneText = zoneLabel(zones, position.x, position.y);
-
-  const commit = (nextLabel: string, nextMemo: string) => {
-    onInfo(cellKeyValue, { label: nextLabel.trim(), memo: nextMemo });
-  };
+  const linked = deviceById(devices, cell?.deviceId);
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-1">
       {zoneText ? <p className="text-[12px] font-medium text-slate-900">{zoneText}</p> : null}
       <p className="text-[12px] text-slate-600">
         가로 {position.x + 1} · 세로 {position.y + 1}
         {cell?.status ? ` · ${resolveItem(index, cell.status, "status").name}` : ""}
         {cell?.kind ? ` · ${resolveItem(index, cell.kind, "kind").name}` : ""}
       </p>
-
-      <label className="text-[11px] text-slate-600">
-        장비 ID
-        <input
-          className={FIELD}
-          value={label}
-          onChange={(event) => setLabel(event.target.value)}
-          onBlur={() => commit(label, memo)}
-        />
-      </label>
-
-      <label className="text-[11px] text-slate-600">
-        메모
-        <textarea
-          className="h-20 w-full resize-none border border-slate-300 bg-white px-2 py-1 text-[13px] text-slate-900 outline-none focus:border-slate-600"
-          value={memo}
-          onChange={(event) => setMemo(event.target.value)}
-          onBlur={() => commit(label, memo)}
-        />
-      </label>
-
-      <button
-        type="button"
-        className={SUB_BUTTON}
-        onClick={() => {
-          setLabel("");
-          setMemo("");
-          commit("", "");
-        }}
-      >
-        ID · 메모 지우기
-      </button>
+      {cell?.label ? <p className="text-[12px] text-slate-700">식별자: {cell.label}</p> : null}
+      {linked ? <p className="text-[12px] text-slate-700">장치: {deviceLabel(linked)}</p> : null}
+      {cell?.memo ? <p className="whitespace-pre-wrap text-[12px] text-slate-500">{cell.memo}</p> : null}
+      <p className="text-[11px] text-slate-400">편집은 칸 우클릭</p>
     </div>
   );
 }
@@ -203,13 +176,12 @@ export function InspectorPanel(props: InspectorPanelProps) {
         ) : null}
 
         {selectedKey ? (
-          <CellInfoForm
-            key={`${selectedKey}|${cell?.label ?? ""}|${cell?.memo ?? ""}`}
+          <CellInfoView
             doc={doc}
             cellKeyValue={selectedKey}
             cell={cell}
             zones={props.zones}
-            onInfo={props.onInfo}
+            devices={props.devices}
           />
         ) : (
           <button type="button" className={SUB_BUTTON} onClick={props.onPick}>

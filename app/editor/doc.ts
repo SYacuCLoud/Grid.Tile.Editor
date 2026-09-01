@@ -10,6 +10,7 @@ import {
   type WireId,
 } from "./palette";
 import type { PagePaper } from "./paper";
+import type { Device } from "./device";
 import type { Zone } from "./zone";
 import { sanitizeZones } from "./zone";
 
@@ -25,6 +26,11 @@ export interface EquipmentCell {
   /** 장비 ID. 예: C1101 */
   label?: string;
   memo?: string;
+  /**
+   * 이 칸에 놓인 장치의 대장 항목(`ProjectDoc.devices`) id. 없으면 필드를
+   * 두지 않는다 — 대장을 안 쓰는 도면은 예전 판과 같은 모양으로 남는다.
+   */
+  deviceId?: string;
   /**
    * 칸에 걸어 둔 사진들(data URL). 현장 사진을 그 자리에 붙여 두면 도면이 대장이 된다.
    * 문서에 함께 담기므로 붙일 때 작게 줄이고 장수·용량을 제한한다(`photo.ts`).
@@ -90,6 +96,11 @@ export interface ProjectDoc {
   layers: LayerDef[];
   /** 사용자가 관리하는 상태 · 장비 · 배선 팔레트. 프로젝트 전체에서 공유된다. */
   palette: PaletteItem[];
+  /**
+   * 장치 대장. 칸은 `EquipmentCell.deviceId` 로 참조한다(`device.ts`).
+   * 페이지가 아니라 프로젝트에 담는다 — 장치를 다른 방으로 옮겨도 같은 항목이다.
+   */
+  devices?: Device[];
 }
 
 /** 단일 페이지 호환성 및 기존 렌더러용 뷰 타입 */
@@ -341,7 +352,9 @@ export function isInside(doc: { cols: number; rows: number }, p: Point): boolean
 }
 
 function isEmptyEquipment(cell: EquipmentCell): boolean {
-  return !cell.status && !cell.kind && !cell.label && !cell.memo && cellPhotos(cell).length === 0;
+  return (
+    !cell.status && !cell.kind && !cell.label && !cell.memo && !cell.deviceId && cellPhotos(cell).length === 0
+  );
 }
 
 /** 팔레트 항목을 페이지 셀에 적용한다. */
@@ -450,7 +463,7 @@ export function eraseCells(doc: LayoutDoc, layer: LayerId, points: Point[]): Lay
 }
 
 /** 칸 정보 편집 상자가 넘기는 값. `photo` 는 이전 판 호출부 호환용이다. */
-export type EquipmentInfoPatch = Pick<EquipmentCell, "label" | "memo" | "photos" | "photo">;
+export type EquipmentInfoPatch = Pick<EquipmentCell, "label" | "memo" | "photos" | "photo" | "deviceId">;
 
 export function updateEquipmentInfoOnPage(
   page: PageDoc,
@@ -460,6 +473,7 @@ export function updateEquipmentInfoOnPage(
   const merged: EquipmentCell = { ...page.equipment[key], ...patch };
   if (!merged.label) delete merged.label;
   if (!merged.memo) delete merged.memo;
+  if (!merged.deviceId) delete merged.deviceId;
 
   // 사진은 목록 하나로 모은다. 이전 판 단일 필드는 여기서 사라진다.
   // patch 에 사진 자리가 없으면 원래 칸의 사진을 그대로 둔다.

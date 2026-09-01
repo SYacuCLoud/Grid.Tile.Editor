@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { type Device, deviceLabel } from "./device";
 
 import {
   checkPhotoRoom,
@@ -32,7 +33,20 @@ interface CellNotePopoverProps {
   pageName: string;
   /** 칸 위치 안내에 쓰는 한 줄 (예: "가로 3 · 세로 5 · 설치 (정상)"). */
   caption: string;
-  onSave: (value: { label: string; memo: string; photos: string[] }) => void;
+  /**
+   * 연결된 장치를 부르는 한 줄. 있으면 식별자 입력을 접는다 — 그 칸의 글자는
+   * 장치 대장의 S/N 이 맡으므로 여기서 고치면 두 곳이 어긋난다.
+   */
+  deviceText?: string;
+  /** 연결된 장치 블록을 눌렀을 때 — 장치 대장 수정 모달로 간다. */
+  onOpenDevice?: () => void;
+  /** 대장의 장치들. 연결 안 된 칸에서 고를 목록이다. */
+  devices?: Device[];
+  /** 연결 안 된 칸을 기존 장치와 잇는다. */
+  onLinkDevice?: (deviceId: string) => void;
+  /** 연결 안 된 칸을 새 장치로 등록한다. 식별자가 S/N 으로 옮겨진다. */
+  onRegisterDevice?: () => void;
+  onSave: (value: { label?: string; memo: string; photos: string[] }) => void;
   onClose: () => void;
 }
 
@@ -50,12 +64,18 @@ export function CellNotePopover(props: CellNotePopoverProps) {
   /** 확대해서 보는 사진의 순번. 닫혀 있으면 null. */
   const [zoomed, setZoomed] = useState<number | null>(null);
   const labelRef = useRef<HTMLInputElement | null>(null);
+  const memoRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  // 열린 순간 한 번만 포커스한다. 장비 ID 부터 넣는 경우가 많다.
+  // 열린 순간 한 번만 포커스한다. 식별자부터 넣는 경우가 많다 —
+  // 장치가 연결된 칸은 식별자 자리가 없으므로 메모로 간다.
   useEffect(() => {
-    labelRef.current?.focus();
-    labelRef.current?.select();
+    if (labelRef.current) {
+      labelRef.current.focus();
+      labelRef.current.select();
+    } else {
+      memoRef.current?.focus();
+    }
   }, []);
 
   // Esc 로 닫는다. (도면을 클릭하면 그리기 쪽에서 닫는다.)
@@ -83,7 +103,9 @@ export function CellNotePopover(props: CellNotePopoverProps) {
     right: flipX ? (cols - x - 1) * cell : undefined,
   };
 
-  const save = () => props.onSave({ label, memo, photos });
+  // 연결된 칸은 글자(label)를 넘기지 않는다 — 대장이 맡은 값을 덮지 않는다.
+  const save = () =>
+    props.onSave(props.deviceText ? { memo, photos } : { label, memo, photos });
 
   /**
    * 고른 그림들을 줄여 목록에 더한다(긴 변 480px, JPEG).
@@ -164,26 +186,72 @@ export function CellNotePopover(props: CellNotePopoverProps) {
       <p className="mb-1 text-[11px] font-semibold text-slate-700">칸 정보</p>
       <p className="mb-1.5 text-[11px] text-slate-500">{props.caption}</p>
 
-      <label className="text-[10px] font-semibold tracking-wide text-slate-500">
-        장비 ID
-        <input
-          ref={labelRef}
-          value={label}
-          onChange={(event) => setLabel(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              save();
-            }
-          }}
-          className="mt-0.5 h-7 w-full border border-slate-300 bg-white px-2 text-[13px] text-slate-900 outline-none focus:border-slate-600"
-          aria-label="장비 ID"
-        />
-      </label>
+      {props.deviceText ? (
+        <button
+          type="button"
+          className="block w-full border border-slate-300 bg-slate-50 px-2 py-1 text-left hover:border-slate-500 hover:bg-slate-100"
+          onClick={props.onOpenDevice}
+          title="장치 대장에서 이 장치의 명세를 고칩니다"
+        >
+          <p className="text-[10px] font-semibold tracking-wide text-slate-500">연결된 장치</p>
+          <p className="text-[12px] text-slate-800">{props.deviceText}</p>
+          <p className="text-[10px] text-slate-500">클릭하면 수정 모달이 열립니다</p>
+        </button>
+      ) : (
+        <>
+          <label className="text-[10px] font-semibold tracking-wide text-slate-500">
+            식별자
+            <input
+              ref={labelRef}
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  save();
+                }
+              }}
+              className="mt-0.5 h-7 w-full border border-slate-300 bg-white px-2 text-[13px] text-slate-900 outline-none focus:border-slate-600"
+              aria-label="식별자"
+            />
+          </label>
+
+          <div className="mt-1.5 flex gap-1">
+            {props.devices && props.devices.length > 0 && props.onLinkDevice ? (
+              <select
+                className="h-7 min-w-0 flex-1 border border-slate-300 bg-white px-1 text-[12px] text-slate-700"
+                value=""
+                onChange={(event) => {
+                  if (event.target.value) props.onLinkDevice?.(event.target.value);
+                }}
+                aria-label="기존 장치와 연결"
+              >
+                <option value="">장치 연결…</option>
+                {props.devices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {deviceLabel(device)}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {props.onRegisterDevice ? (
+              <button
+                type="button"
+                className="h-7 shrink-0 border border-slate-300 bg-white px-2 text-[12px] text-slate-700 hover:bg-slate-100"
+                onClick={props.onRegisterDevice}
+                title="이 칸을 장치 대장에 올립니다. 식별자가 S/N 으로 옮겨집니다."
+              >
+                새 장치로 등록
+              </button>
+            ) : null}
+          </div>
+        </>
+      )}
 
       <label className="mt-1.5 block text-[10px] font-semibold tracking-wide text-slate-500">
         메모
         <textarea
+          ref={memoRef}
           value={memo}
           onChange={(event) => setMemo(event.target.value)}
           onKeyDown={(event) => {
@@ -301,7 +369,7 @@ export function CellNotePopover(props: CellNotePopoverProps) {
             type="button"
             className="mt-1 h-7 w-full border border-slate-300 bg-white text-[12px] text-slate-700 hover:bg-slate-100"
             onClick={printPhotos}
-            title="이 칸의 장비 ID · 메모 · 사진을 한 장으로 모아 인쇄한다"
+            title="이 칸의 식별자 · 메모 · 사진을 한 장으로 모아 인쇄한다"
           >
             이 칸 사진 인쇄 ({photos.length}장)
           </button>
@@ -328,9 +396,15 @@ export function CellNotePopover(props: CellNotePopoverProps) {
         <button
           type="button"
           className={BUTTON}
-          onClick={() => props.onSave({ label: "", memo: "", photos: [] })}
-          disabled={!props.initialLabel && !props.initialMemo && props.initialPhotos.length === 0}
-          title="이 칸의 장비 ID · 메모 · 사진을 지운다"
+          onClick={() =>
+            props.onSave(props.deviceText ? { memo: "", photos: [] } : { label: "", memo: "", photos: [] })
+          }
+          disabled={
+            props.deviceText
+              ? !props.initialMemo && props.initialPhotos.length === 0
+              : !props.initialLabel && !props.initialMemo && props.initialPhotos.length === 0
+          }
+          title={props.deviceText ? "이 칸의 메모 · 사진을 지운다 (장치 연결은 남는다)" : "이 칸의 식별자 · 메모 · 사진을 지운다"}
         >
           지우기
         </button>

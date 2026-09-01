@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CellNotePopover } from "./CellNotePopover";
+import { deviceById, deviceLabel } from "./device";
+import { DevicePanel } from "./DevicePanel";
 import { legendBandCells, legendColumns, sheetCells } from "./paper";
 import { cellPhotos, parseCellKey } from "./doc";
 import { GridCanvas } from "./GridCanvas";
@@ -189,6 +191,27 @@ export function GridEditor() {
   // 로컬 폴더(.grid-projects) 기반 공유. 서버가 없는 자리에서는 스스로 접힌다.
   // 워터마크에 리비전 · 작성자를 적으므로 내보내기보다 먼저 둔다.
   const server = useServerProjects(state.project, actions.replaceProject);
+
+  // 탭 제목에 도면 이름과 서버 리비전을 적는다. 같은 도면을 탭 여럿에 띄워 두면
+  // 제목만으로 어느 판을 보고 있는지 가려야 한다. 서버 도면이 아니면 리비전은 뺀다.
+  useEffect(() => {
+    const revision = server.currentId ? ` · r${server.baseRevision}` : "";
+    document.title = `${state.project.title}${revision} — 격자형 배치 편집기`;
+  }, [server.currentId, server.baseRevision, state.project.title]);
+
+  // 장치 대장 목록 상자. 열 때 특정 장치를 바로 펼칠 수 있다(칸 우클릭 → 수정).
+  const [devicePanel, setDevicePanel] = useState<{ focusId?: string } | null>(null);
+  /** 배치 모드에 든 장치. 배너에 이름을 적는 데만 쓴다. */
+  const placingDevice = deviceById(state.project.devices, state.placingDeviceId ?? undefined);
+  const jumpToDevice = useCallback(
+    (pageId: string, key: string) => {
+      actions.switchPage(pageId);
+      actions.setSelectedKey(key);
+      actions.setTool("pick");
+      setDevicePanel(null);
+    },
+    [actions],
+  );
 
   const exportPng = useCallback(() => {
     const stamp = fileStamp();
@@ -482,12 +505,48 @@ export function GridEditor() {
         photoCount={photoEntries.length}
         onPrintPhotoLedger={printPhotoLedger}
         onDownloadPhotos={downloadAllPhotos}
+        deviceCount={state.project.devices?.length ?? 0}
+        onOpenDevices={() => setDevicePanel({})}
         onLoadSample={actions.loadSample}
         onReset={resetAll}
       />
 
       <ServerBar state={server} actions={server.actions} />
       <HistoryPanel state={server} actions={server.actions} />
+
+      <DevicePanel
+        key={devicePanel?.focusId ?? "plain"}
+        open={devicePanel !== null}
+        focusId={devicePanel?.focusId}
+        project={state.project}
+        onClose={() => setDevicePanel(null)}
+        onJump={jumpToDevice}
+        onPlace={(deviceId) => {
+          setDevicePanel(null);
+          actions.startPlacing(deviceId);
+        }}
+        onUnplace={actions.unplaceDevice}
+        onUpsert={actions.upsertDevice}
+        onDelete={actions.deleteDevice}
+      />
+
+      {placingDevice ? (
+        <div className="fixed inset-x-0 top-2 z-40 flex justify-center">
+          <div className="flex items-center gap-2 border border-slate-700 bg-slate-800 px-3 py-1.5 text-[12px] text-white shadow-lg">
+            <span>
+              배치 중: {deviceLabel(placingDevice)} — 도면에서 놓을 칸을 클릭하세요
+            </span>
+            <button
+              type="button"
+              className="border border-slate-500 bg-slate-700 px-2 py-0.5 text-[11px] hover:bg-slate-600"
+              onClick={actions.cancelPlacing}
+              title="Esc"
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <PageTabs
         pages={state.project.pages}
@@ -576,6 +635,24 @@ export function GridEditor() {
                 pageId={state.project.activePageId}
                 pageName={state.activePageDoc.name}
                 caption={noteCaption}
+                {...(() => {
+                  const linked = deviceById(state.project.devices, state.doc.equipment[noteCell.key]?.deviceId);
+                  if (linked) {
+                    // 연결된 칸: 장치 블록을 누르면 대장 수정 모달이 그 장치를 펼친 채 열린다.
+                    return {
+                      deviceText: deviceLabel(linked),
+                      onOpenDevice: () => {
+                        actions.closeNote();
+                        setDevicePanel({ focusId: linked.id });
+                      },
+                    };
+                  }
+                  return {
+                    devices: state.project.devices ?? [],
+                    onLinkDevice: (deviceId: string) => actions.linkDevice(noteCell.key, deviceId),
+                    onRegisterDevice: () => actions.registerDevice(noteCell.key),
+                  };
+                })()}
                 onSave={(value) => actions.saveNote(noteCell.key, value)}
                 onClose={actions.closeNote}
               />
@@ -606,7 +683,7 @@ export function GridEditor() {
           selectionRange={state.selectionRange}
           legend={legend}
           hasClipboard={!!state.clipboard}
-          onInfo={actions.setInfo}
+          devices={state.project.devices ?? []}
           onSize={actions.setSize}
           paper={state.activePageDoc.paper}
           legendCount={legend.length}

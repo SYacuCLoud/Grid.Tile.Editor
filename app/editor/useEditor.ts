@@ -25,6 +25,14 @@ import {
   updateEquipmentInfoOnPage,
 } from "./doc";
 import {
+  type Device,
+  linkDeviceToCell,
+  registerDeviceForCell,
+  removeDeviceFromProject,
+  unplaceDeviceInProject,
+  upsertDeviceInProject,
+} from "./device";
+import {
   addLayer as addLayerDef,
   canEditLayer,
   deleteLayer as deleteLayerDef,
@@ -85,7 +93,7 @@ export const TOOLS: ToolMeta[] = [
   { id: "rect", name: "사각형", hint: "테두리만 그리기" },
   { id: "rectFill", name: "사각형 채움", hint: "영역 전체 칠하기" },
   { id: "fill", name: "채우기", hint: "이어진 같은 칸 한번에" },
-  { id: "pick", name: "선택", hint: "범위 드래그 선택 · 장비 ID · 메모" },
+  { id: "pick", name: "선택", hint: "범위 드래그 선택 · 식별자 · 메모" },
 ];
 
 export const ZOOM_STEPS = [14, 18, 22, 26, 32];
@@ -145,6 +153,8 @@ export interface EditorState {
   preview: Point[];
   canUndo: boolean;
   canRedo: boolean;
+  /** 대장에서 들어 둔 장치 — 다음 칸 클릭에 배치된다. 없으면 null. */
+  placingDeviceId: string | null;
 }
 
 /**
@@ -200,6 +210,8 @@ export function useEditor() {
   const [zonePopover, setZonePopover] = useState<ZonePopoverState | null>(null);
 
   const [selectionRange, setSelectionRange] = useState<CellRange | null>(null);
+  /** 대장에서 «배치» 를 눌러 든 장치. 다음에 누르는 칸에 연결된다. */
+  const [placingDeviceId, setPlacingDeviceId] = useState<string | null>(null);
   const [clipboard, setClipboard] = useState<ClipboardData | null>(null);
   const [hover, setHover] = useState<Point | null>(null);
   const [preview, setPreview] = useState<Point[]>([]);
@@ -334,6 +346,19 @@ export function useEditor() {
       // 도면을 누르면 열려 있던 메모 상자를 닫는다.
       setNoteKey(null);
 
+      // 배치 모드 — 들고 있던 장치를 이 칸에 연결하고 끝낸다. 도구는 건드리지
+      // 않은 채 한 번만 가로챈다: 잘못 누르면 Esc 로 취소하고 다시 들면 된다.
+      if (placingDeviceId) {
+        const id = placingDeviceId;
+        const key = cellKey(p.x, p.y);
+        setPlacingDeviceId(null);
+        applyEdit((current) => linkDeviceToCell(current, key, id));
+        setTool("pick");
+        setSelectionRange(normalizeRange(p, p, doc));
+        setSelectedKey(key);
+        return;
+      }
+
       if (tool === "pick") {
         // 이름표를 누르면 범위 선택 대신 그 이름표를 끈다. 선택 도구에서만 잡는다 —
         // 칠하는 도구에서 이름표가 잡히면 구역 위에는 칠할 수 없게 된다.
@@ -386,6 +411,7 @@ export function useEditor() {
       activePageDoc.zonesHidden,
       applyEdit,
       doc,
+      placingDeviceId,
       tool,
       writePointsOnPage,
     ],
@@ -539,13 +565,17 @@ export function useEditor() {
   }, []);
 
 
-  /** 장비 ID · 메모 · 사진을 함께 바꾼다. 같은 칸의 상태·장비는 건드리지 않는다. */
+  /**
+   * 장비 ID · 메모 · 사진을 함께 바꾼다. 같은 칸의 상태·장비는 건드리지 않는다.
+   * label 이 없는 호출은 글자를 그대로 둔다 — 장치가 연결된 칸의 글자는 대장이
+   * 맡으므로 메모 상자가 건드리지 않는다.
+   */
   const saveNote = useCallback(
-    (key: string, value: { label: string; memo: string; photos?: string[] }) => {
+    (key: string, value: { label?: string; memo: string; photos?: string[] }) => {
       applyEdit((current) =>
         updateActivePage(current, (page) =>
           updateEquipmentInfoOnPage(page, key, {
-            label: value.label.trim(),
+            ...(value.label !== undefined ? { label: value.label.trim() } : {}),
             memo: value.memo,
             photos: value.photos ?? [],
           }),
@@ -559,6 +589,46 @@ export function useEditor() {
   const setInfo = useCallback(
     (key: string, patch: { label?: string; memo?: string }) => {
       applyEdit((current) => updateActivePage(current, (page) => updateEquipmentInfoOnPage(page, key, patch)));
+    },
+    [applyEdit],
+  );
+
+  // 장치 대장 — 항목 편집은 프로젝트 devices 를, 연결은 활성 페이지의 칸을 만진다.
+  // 모두 applyEdit 를 지나므로 Ctrl+Z 로 되돌릴 수 있다.
+  const upsertDevice = useCallback(
+    (device: Device) => {
+      applyEdit((current) => upsertDeviceInProject(current, device));
+    },
+    [applyEdit],
+  );
+
+  const deleteDevice = useCallback(
+    (id: string) => {
+      applyEdit((current) => removeDeviceFromProject(current, id));
+    },
+    [applyEdit],
+  );
+
+  /** 장치를 도면에서 뺀다. 대장에는 미배치로 남는다. */
+  const unplaceDevice = useCallback(
+    (id: string) => {
+      applyEdit((current) => unplaceDeviceInProject(current, id));
+    },
+    [applyEdit],
+  );
+
+  /** 칸이 가리키는 장치를 바꾼다. null 이면 연결만 풀고 장치는 대장에 남는다. */
+  const linkDevice = useCallback(
+    (key: string, deviceId: string | null) => {
+      applyEdit((current) => linkDeviceToCell(current, key, deviceId));
+    },
+    [applyEdit],
+  );
+
+  /** 칸을 새 장치로 등록하고 연결한다. 칸의 장비 ID 가 S/N 으로 옮겨 심어진다. */
+  const registerDevice = useCallback(
+    (key: string) => {
+      applyEdit((current) => registerDeviceForCell(current, key));
     },
     [applyEdit],
   );
@@ -887,6 +957,13 @@ export function useEditor() {
         return;
       }
 
+      // 배치 모드는 Esc 로 내려놓는다. 다른 Esc 사용처(메모 상자 등)보다 먼저 본다.
+      if (event.key === "Escape" && placingDeviceId) {
+        event.preventDefault();
+        setPlacingDeviceId(null);
+        return;
+      }
+
       // 방향키는 수식키 없이 쓴다. 칸 메모 상자(및 그 안의 사진 확대 보기)가
       // 열려 있으면 그쪽이 ←/→ 를 쓰므로 페이지를 넘기지 않는다.
       // 구역 상자도 같다 — 페이지가 바뀌면 상자가 다른 페이지의 구역을 들고 남는다.
@@ -926,7 +1003,7 @@ export function useEditor() {
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [copy, cut, noteKey, paste, project, redo, switchPage, undo, zonePopover]);
+  }, [copy, cut, noteKey, paste, placingDeviceId, project, redo, switchPage, undo, zonePopover]);
 
   const state: EditorState = useMemo(
     () => ({
@@ -952,6 +1029,7 @@ export function useEditor() {
       preview,
       canUndo: history.past.length > 0,
       canRedo: history.future.length > 0,
+      placingDeviceId,
     }),
     [
       activeId,
@@ -968,6 +1046,7 @@ export function useEditor() {
       hover,
       noteKey,
       zonePopover,
+      placingDeviceId,
       preview,
       project,
       selectedKey,
@@ -1005,6 +1084,13 @@ export function useEditor() {
       cut,
       paste,
       setInfo,
+      upsertDevice,
+      deleteDevice,
+      unplaceDevice,
+      linkDevice,
+      registerDevice,
+      startPlacing: setPlacingDeviceId,
+      cancelPlacing: () => setPlacingDeviceId(null),
       setTitle,
       setSize,
       setPaper,

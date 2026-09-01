@@ -1,4 +1,5 @@
 import { type EquipmentCell, DOC_VERSION, type LayerCells, type PageDoc, type ProjectDoc } from "./doc";
+import { sanitizeDevices } from "./device";
 import { type LayerDef, sanitizeLayers } from "./layers";
 import { ensurePalette } from "./paletteOps";
 import { type PagePaper, sanitizePaper } from "./paper";
@@ -40,6 +41,7 @@ function sanitizeEquipment(raw: unknown): Record<string, EquipmentCell> {
     delete cell.photo;
     if (photos.length > 0) cell.photos = photos;
     else delete cell.photos;
+    if (typeof cell.deviceId !== "string" || !cell.deviceId) delete cell.deviceId;
     out[key] = cell;
   }
 
@@ -106,6 +108,8 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
         ? raw.activePageId
         : pages[0].id;
 
+    const devices = sanitizeDevices(raw.devices);
+
     return {
       version: typeof raw.version === "number" ? raw.version : DOC_VERSION,
       title: typeof raw.title === "string" ? raw.title : "격자형 배치 프로젝트",
@@ -113,6 +117,7 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
       pages,
       layers,
       palette: ensurePalette(raw.palette),
+      ...(devices ? { devices } : {}),
     };
   }
 
@@ -186,6 +191,14 @@ export function downloadCanvasPng(canvas: HTMLCanvasElement, filename: string) {
 /** data URL 하나를 파일로 내려받는다. 칸 사진이 이 길로 나간다. */
 export function downloadDataUrl(dataUrl: string, filename: string) {
   triggerDownload(dataUrl, filename);
+}
+
+/** 글 파일 하나를 내려받는다. 장치 대장 CSV · 마크다운이 이 길로 나간다. */
+export function downloadText(text: string, filename: string, mime = "text/plain") {
+  const blob = new Blob([text], { type: `${mime};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  triggerDownload(url, filename);
+  URL.revokeObjectURL(url);
 }
 
 /** 파일 이름으로 쓸 수 있게 다듬는다. 남는 것이 없으면 `배치도`. */
