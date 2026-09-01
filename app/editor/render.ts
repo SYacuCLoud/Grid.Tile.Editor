@@ -1,7 +1,9 @@
+import { arcControlPoint, CONNECTION_COLOR, CONNECTION_LAYER_ID, type ConnectionSegment } from "./connection";
 import { cellKey, cellPhotos, type LayoutDoc, paintedCells, type Point } from "./doc";
 import { defaultLayers, type LayerDef } from "./layers";
 import {
   indexPalette,
+  inkOnPaper,
   itemOpacity,
   type LayerId,
   type PaletteIndex,
@@ -592,7 +594,101 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: LayoutDoc, options
   }
   if (!gridDrawn) drawGrid();
 
+  // 연결선은 도면 맨 위에 얹는다. 켜 두면 화면·PNG·인쇄에 똑같이 실린다 —
+  // 호버 애니메이션은 캔버스 밖 SVG 오버레이의 몫이고, 여기는 정지 그림이다.
+  if (doc.connectionSegments && visible[CONNECTION_LAYER_ID] !== false) {
+    drawConnections(ctx, doc, doc.connectionSegments, cell);
+  }
+
   renderOverlays(ctx, doc, options, extent, band);
+  ctx.restore();
+}
+
+/** 끝점 칸의 눈에 보이는 색 — 상태색 → 장비색 → 배경 타일색 순. 없으면 null. */
+function cellColorAt(doc: LayoutDoc, index: PaletteIndex, p: Point): string | null {
+  const key = cellKey(p.x, p.y);
+  const cellData = doc.equipment[key];
+  if (cellData?.status) return resolveItem(index, cellData.status, "status").color ?? null;
+  if (cellData?.kind) return resolveItem(index, cellData.kind, "kind").color ?? null;
+  const tile = doc.background[key];
+  return tile ? (resolveItem(index, tile, "tile").color ?? null) : null;
+}
+
+/**
+ * 연결 가닥들의 양끝 색. 연결에 색을 지정했으면 그 단색으로, 아니면 양끝 칸의
+ * 색을 물려받아 그라데이션 양끝으로 쓴다 — 원본 칸의 색에서 대상 칸의 색으로
+ * 자연스럽게 넘어간다. 칠하지 않은 칸(흰 바탕)은 기본 파랑, 연한 색은 어둡게
+ * 눌러(`inkOnPaper`) 흰 종이에 묻히지 않게 한다. 캔버스와 SVG 오버레이가
+ * 같은 답을 쓴다.
+ */
+export function connectionEndColors(
+  doc: LayoutDoc,
+  segments: ConnectionSegment[],
+): Array<{ from: string; to: string }> {
+  const index = indexPalette(doc.palette);
+  return segments.map((segment) => {
+    const fixed = segment.connection.color;
+    if (fixed) return { from: fixed, to: fixed };
+    return {
+      from: inkOnPaper(cellColorAt(doc, index, segment.from), CONNECTION_COLOR),
+      to: inkOnPaper(cellColorAt(doc, index, segment.to), CONNECTION_COLOR),
+    };
+  });
+}
+
+/**
+ * 연결선 — 칸 가운데를 잇는 포물선 점선.
+ *
+ * 정지 화면에서는 방향을 애니메이션으로 말할 수 없으므로 도착점에 화살촉을,
+ * 출발점에 점을 찍는다. 굵기·점선 간격은 칸 크기에 비례한다 — 인쇄는 화면보다
+ * 칸이 몇 배 크다.
+ */
+function drawConnections(ctx: CanvasRenderingContext2D, doc: LayoutDoc, segments: ConnectionSegment[], cell: number) {
+  const dash = [cell * 0.32, cell * 0.23];
+  const colors = connectionEndColors(doc, segments);
+  ctx.save();
+  ctx.lineWidth = Math.max(1.5, cell * 0.09);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  for (const [i, segment] of segments.entries()) {
+    const a = { x: (segment.from.x + 0.5) * cell, y: (segment.from.y + 0.5) * cell };
+    const b = { x: (segment.to.x + 0.5) * cell, y: (segment.to.y + 0.5) * cell };
+    const control = arcControlPoint(a, b);
+
+    // 그라데이션은 좌표 공간에 깔리므로 출발점의 점·도착점의 화살촉도
+    // 제 위치의 색을 자연히 받는다.
+    const { from: colorA, to: colorB } = colors[i];
+    if (colorA === colorB) {
+      ctx.strokeStyle = ctx.fillStyle = colorA;
+    } else {
+      const gradient = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+      gradient.addColorStop(0, colorA);
+      gradient.addColorStop(1, colorB);
+      ctx.strokeStyle = ctx.fillStyle = gradient;
+    }
+
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.quadraticCurveTo(control.x, control.y, b.x, b.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 출발점의 점.
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, Math.max(2, cell * 0.1), 0, Math.PI * 2);
+    ctx.fill();
+
+    // 도착점의 화살촉. 곡선의 끝 접선(제어점 → 끝점) 방향으로 벌린다.
+    const angle = Math.atan2(b.y - control.y, b.x - control.x);
+    const length = Math.max(5, cell * 0.3);
+    ctx.beginPath();
+    ctx.moveTo(b.x - length * Math.cos(angle - 0.5), b.y - length * Math.sin(angle - 0.5));
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(b.x - length * Math.cos(angle + 0.5), b.y - length * Math.sin(angle + 0.5));
+    ctx.stroke();
+  }
   ctx.restore();
 }
 

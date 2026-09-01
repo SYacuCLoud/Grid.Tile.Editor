@@ -99,6 +99,10 @@ interface ToolbarProps {
   hasClipboard: boolean;
   showGrid: boolean;
   showRuler: boolean;
+  /** 연결선을 항상 표시(PNG·인쇄 포함). 꺼도 칸에 호버하면 그 칸의 연결은 흐른다. */
+  showConnections: boolean;
+  /** 프로젝트의 연결 수. 체크박스 옆에 함께 보인다. */
+  connectionCount: number;
   cell: number;
   onTitle: (value: string) => void;
   onTool: (tool: ToolId) => void;
@@ -109,6 +113,7 @@ interface ToolbarProps {
   onPaste: () => void;
   onShowGrid: (value: boolean) => void;
   onShowRuler: (value: boolean) => void;
+  onShowConnections: (value: boolean) => void;
   onZoom: (delta: number) => void;
   onExportJson: () => void;
   onImportJson: () => void;
@@ -211,6 +216,17 @@ export function Toolbar(props: ToolbarProps) {
               onChange={(event) => props.onShowRuler(event.target.checked)}
             />
             눈금자
+          </label>
+          <label
+            className="flex items-center gap-1 text-[12px] text-slate-700"
+            title="장치 연결선을 항상 표시하고 PNG·인쇄에도 싣는다. 꺼도 칸에 마우스를 올리면 그 칸의 연결이 보인다"
+          >
+            <input
+              type="checkbox"
+              checked={props.showConnections}
+              onChange={(event) => props.onShowConnections(event.target.checked)}
+            />
+            연결{props.connectionCount > 0 ? ` (${props.connectionCount})` : ""}
           </label>
         </div>
 

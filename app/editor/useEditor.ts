@@ -73,6 +73,12 @@ import {
 } from "./range";
 import type { PagePaper } from "./paper";
 import type { Zone } from "./zone";
+import {
+  addConnectionToProject,
+  CONNECTION_LAYER_ID,
+  type ConnectionEnd,
+  removeConnectionFromProject,
+} from "./connection";
 import { contextMenuFor, moveZoneLabel, ZONE_LAYER_ID, zoneLabelAt } from "./zone";
 import { createSampleProject } from "./sample";
 import { floodFillPoints, linePoints, rectFillPoints, rectOutlinePoints } from "./shapes";
@@ -136,6 +142,8 @@ export interface EditorState {
   showGrid: boolean;
   /** 칸 번호 눈금자를 도면 위·왼쪽에 붙일지. */
   showRuler: boolean;
+  /** 연결선을 항상 표시할지(PNG·인쇄 포함). 꺼도 호버 애니메이션은 산다. */
+  showConnections: boolean;
   cell: number;
   selectedKey: string | null;
   /** 메모 편집 상자를 열어 둔 칸. 없으면 null. */
@@ -155,6 +163,8 @@ export interface EditorState {
   canRedo: boolean;
   /** 대장에서 들어 둔 장치 — 다음 칸 클릭에 배치된다. 없으면 null. */
   placingDeviceId: string | null;
+  /** 연결 긋기의 출발 끝점 — 다음 칸 클릭이 도착점이 된다. 없으면 null. */
+  connectingFrom: ConnectionEnd | null;
 }
 
 /**
@@ -204,6 +214,8 @@ export function useEditor() {
   const [activeLayer, setActiveLayer] = useState<LayerId>("equipment");
   const [showGrid, setShowGrid] = useState(true);
   const [showRuler, setShowRuler] = useState(true);
+  /** 연결선을 항상 표시(출력 포함). 꺼도 호버 애니메이션은 동작한다. */
+  const [showConnections, setShowConnections] = useState(false);
   const [cell, setCell] = useState(22);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [noteKey, setNoteKey] = useState<string | null>(null);
@@ -212,6 +224,8 @@ export function useEditor() {
   const [selectionRange, setSelectionRange] = useState<CellRange | null>(null);
   /** 대장에서 «배치» 를 눌러 든 장치. 다음에 누르는 칸에 연결된다. */
   const [placingDeviceId, setPlacingDeviceId] = useState<string | null>(null);
+  /** 연결 긋기의 출발 끝점. 다음에 누르는 칸이 도착점이 된다. 없으면 null. */
+  const [connectingFrom, setConnectingFrom] = useState<ConnectionEnd | null>(null);
   const [clipboard, setClipboard] = useState<ClipboardData | null>(null);
   const [hover, setHover] = useState<Point | null>(null);
   const [preview, setPreview] = useState<Point[]>([]);
@@ -227,8 +241,11 @@ export function useEditor() {
   const visible = useMemo(() => {
     const map = visibleMap(project.layers);
     map[ZONE_LAYER_ID] = activePageDoc.zonesHidden !== true;
+    // 연결선도 구역과 같은 길 — 이 맵을 화면·PNG·인쇄가 함께 보므로
+    // 체크 하나로 세 곳이 같이 갈린다.
+    map[CONNECTION_LAYER_ID] = showConnections;
     return map;
-  }, [activePageDoc.zonesHidden, project.layers]);
+  }, [activePageDoc.zonesHidden, project.layers, showConnections]);
   const activeLayerDef = useMemo(() => layerById(project.layers, activeLayer) ?? null, [activeLayer, project.layers]);
   const layerLocked = activeLayerDef?.locked === true;
 
@@ -359,6 +376,25 @@ export function useEditor() {
         return;
       }
 
+      // 연결 모드 — 들고 있던 출발점에서 이 칸으로 연결을 긋고 끝낸다. 칸에
+      // 장치가 있으면 장치 끝점(옮겨도 따라감), 없으면 칸 끝점(계획 지점)이다.
+      if (connectingFrom) {
+        const from = connectingFrom;
+        const key = cellKey(p.x, p.y);
+        setConnectingFrom(null);
+        applyEdit((current) => {
+          const deviceId = activePage(current).equipment[key]?.deviceId;
+          const to: ConnectionEnd = deviceId
+            ? { device: deviceId }
+            : { page: current.activePageId, cell: key };
+          return addConnectionToProject(current, from, to);
+        });
+        setTool("pick");
+        setSelectionRange(normalizeRange(p, p, doc));
+        setSelectedKey(key);
+        return;
+      }
+
       if (tool === "pick") {
         // 이름표를 누르면 범위 선택 대신 그 이름표를 끈다. 선택 도구에서만 잡는다 —
         // 칠하는 도구에서 이름표가 잡히면 구역 위에는 칠할 수 없게 된다.
@@ -410,6 +446,7 @@ export function useEditor() {
       activePageDoc.zones,
       activePageDoc.zonesHidden,
       applyEdit,
+      connectingFrom,
       doc,
       placingDeviceId,
       tool,
@@ -629,6 +666,28 @@ export function useEditor() {
   const registerDevice = useCallback(
     (key: string) => {
       applyEdit((current) => registerDeviceForCell(current, key));
+    },
+    [applyEdit],
+  );
+
+  /**
+   * 이 칸을 출발점으로 연결 긋기를 시작한다. 칸에 장치가 있으면 장치 끝점,
+   * 없으면 칸 끝점을 든다. 다음에 누르는 칸이 도착점이 된다(Esc 취소).
+   */
+  const startConnecting = useCallback(
+    (key: string) => {
+      const deviceId = activePageDoc.equipment[key]?.deviceId;
+      setConnectingFrom(
+        deviceId ? { device: deviceId } : { page: project.activePageId, cell: key },
+      );
+      setNoteKey(null);
+    },
+    [activePageDoc.equipment, project.activePageId],
+  );
+
+  const removeConnection = useCallback(
+    (id: string) => {
+      applyEdit((current) => removeConnectionFromProject(current, id));
     },
     [applyEdit],
   );
@@ -957,10 +1016,11 @@ export function useEditor() {
         return;
       }
 
-      // 배치 모드는 Esc 로 내려놓는다. 다른 Esc 사용처(메모 상자 등)보다 먼저 본다.
-      if (event.key === "Escape" && placingDeviceId) {
+      // 배치·연결 모드는 Esc 로 내려놓는다. 다른 Esc 사용처(메모 상자 등)보다 먼저 본다.
+      if (event.key === "Escape" && (placingDeviceId || connectingFrom)) {
         event.preventDefault();
         setPlacingDeviceId(null);
+        setConnectingFrom(null);
         return;
       }
 
@@ -1003,7 +1063,7 @@ export function useEditor() {
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [copy, cut, noteKey, paste, placingDeviceId, project, redo, switchPage, undo, zonePopover]);
+  }, [connectingFrom, copy, cut, noteKey, paste, placingDeviceId, project, redo, switchPage, undo, zonePopover]);
 
   const state: EditorState = useMemo(
     () => ({
@@ -1019,6 +1079,7 @@ export function useEditor() {
       visible,
       showGrid,
       showRuler,
+      showConnections,
       cell,
       selectedKey,
       noteKey,
@@ -1030,6 +1091,7 @@ export function useEditor() {
       canUndo: history.past.length > 0,
       canRedo: history.future.length > 0,
       placingDeviceId,
+      connectingFrom,
     }),
     [
       activeId,
@@ -1038,6 +1100,7 @@ export function useEditor() {
       activeLayerDef,
       activePageDoc,
       cell,
+      connectingFrom,
       layerLocked,
       clipboard,
       doc,
@@ -1053,6 +1116,7 @@ export function useEditor() {
       selectionRange,
       showGrid,
       showRuler,
+      showConnections,
       tool,
       visible,
     ],
@@ -1077,6 +1141,7 @@ export function useEditor() {
       deleteLayer,
       setShowGrid,
       setShowRuler,
+      setShowConnections,
       zoomBy,
       undo,
       redo,
@@ -1091,6 +1156,9 @@ export function useEditor() {
       registerDevice,
       startPlacing: setPlacingDeviceId,
       cancelPlacing: () => setPlacingDeviceId(null),
+      startConnecting,
+      cancelConnecting: () => setConnectingFrom(null),
+      removeConnection,
       setTitle,
       setSize,
       setPaper,

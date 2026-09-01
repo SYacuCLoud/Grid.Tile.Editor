@@ -7,6 +7,7 @@
  * 장치 정보가 따라간다.
  */
 
+import { dropConnectionsOfDevice } from "./connection";
 import {
   activePage,
   type ProjectDoc,
@@ -199,10 +200,12 @@ export function unplaceDeviceInProject(project: ProjectDoc, id: string): Project
 }
 
 /**
- * 장치를 대장에서 지운다. 모든 페이지에서 그 장치를 가리키던 칸의 연결도
- * 함께 푼다 — 끊어진 참조를 남기면 칸이 없는 장치를 계속 부른다.
+ * 장치를 대장에서 지운다. 모든 페이지에서 그 장치를 가리키던 칸의 연결과,
+ * 이 장치가 낀 장치 연결도 함께 걷어 낸다 — 끊어진 참조를 남기면 칸이
+ * 없는 장치를 계속 부른다.
  */
 export function removeDeviceFromProject(project: ProjectDoc, id: string): ProjectDoc {
+  project = dropConnectionsOfDevice(project, id);
   const devices = (project.devices ?? []).filter((device) => device.id !== id);
 
   const pages = project.pages.map((page) => {

@@ -46,6 +46,12 @@ interface CellNotePopoverProps {
   onLinkDevice?: (deviceId: string) => void;
   /** 연결 안 된 칸을 새 장치로 등록한다. 식별자가 S/N 으로 옮겨진다. */
   onRegisterDevice?: () => void;
+  /** 이 칸이 낀 장치 연결들. 방향과 상대편을 적은 한 줄씩이다. */
+  cellConnections?: Array<{ id: string; text: string }>;
+  /** 이 칸을 출발점으로 연결 긋기를 시작한다. 다음에 누르는 칸이 도착점이다. */
+  onStartConnect?: () => void;
+  /** 연결 하나를 지운다. */
+  onRemoveConnection?: (id: string) => void;
   onSave: (value: { label?: string; memo: string; photos: string[] }) => void;
   onClose: () => void;
 }
@@ -247,6 +253,43 @@ export function CellNotePopover(props: CellNotePopoverProps) {
           </div>
         </>
       )}
+
+      {props.onStartConnect ? (
+        <div className="mt-1.5">
+          <p className="text-[10px] font-semibold tracking-wide text-slate-500">연결</p>
+          {props.cellConnections && props.cellConnections.length > 0 ? (
+            <ul className="mt-0.5 flex flex-col gap-0.5">
+              {props.cellConnections.map((connection) => (
+                <li
+                  key={connection.id}
+                  className="flex items-center gap-1 border border-slate-200 bg-slate-50 px-1.5 py-0.5"
+                >
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-slate-700" title={connection.text}>
+                    {connection.text}
+                  </span>
+                  <button
+                    type="button"
+                    className="h-4 w-4 shrink-0 border border-slate-400 bg-white text-[10px] leading-none text-slate-700 hover:bg-red-50 hover:text-red-700"
+                    onClick={() => props.onRemoveConnection?.(connection.id)}
+                    title="이 연결을 지운다"
+                    aria-label={`연결 지우기: ${connection.text}`}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <button
+            type="button"
+            className="mt-0.5 h-7 w-full border border-slate-300 bg-white text-[12px] text-slate-700 hover:bg-slate-100"
+            onClick={props.onStartConnect}
+            title="이 칸에서 다른 칸·장치로 연결을 긋습니다. 다음에 클릭하는 칸이 도착점입니다 (Esc 취소)."
+          >
+            + 연결 긋기
+          </button>
+        </div>
+      ) : null}
 
       <label className="mt-1.5 block text-[10px] font-semibold tracking-wide text-slate-500">
         메모

@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { connectionEndKey, connectionsOfDevice } from "./connection";
+import { connectionTextFor } from "./connectionText";
 import { type Device, nextDeviceId } from "./device";
 import { devicesToCsv, devicesToMarkdown } from "./deviceExport";
 import { DeviceForm, deviceFormKey } from "./DeviceForm";
@@ -74,10 +76,12 @@ interface DevicePanelProps {
   onUnplace: (deviceId: string) => void;
   onUpsert: (device: Device) => void;
   onDelete: (id: string) => void;
+  /** 이 장치가 낀 연결 하나를 지운다. */
+  onRemoveConnection: (id: string) => void;
 }
 
 /** 장치 대장 전체 목록. 행을 누르면 그 자리에서 명세를 고친다. */
-export function DevicePanel({ open, focusId, project, onClose, onJump, onPlace, onUnplace, onUpsert, onDelete }: DevicePanelProps) {
+export function DevicePanel({ open, focusId, project, onClose, onJump, onPlace, onUnplace, onUpsert, onDelete, onRemoveConnection }: DevicePanelProps) {
   // 우클릭 → 수정으로 들어오면 그 장치가 펼쳐진 채 시작한다. focusId 가 바뀌면
   // 밖에서 key 로 새로 마운트한다 — 상자 안에서 상태를 갈아 끼우지 않는다.
   const [detailId, setDetailId] = useState<string | null>(focusId ?? null);
@@ -183,11 +187,20 @@ export function DevicePanel({ open, focusId, project, onClose, onJump, onPlace, 
                 {shown.map((device) => {
                   const placed = placements.get(device.id) ?? [];
                   const detail = detailId === device.id;
+                  // 이 장치가 낀 연결. 나가는 것은 "→ 상대", 들어오는 것은 "← 상대".
+                  const myKeys = new Set([connectionEndKey({ device: device.id })]);
+                  const connections = connectionsOfDevice(project.connections, device.id).map(
+                    (connection) => ({
+                      id: connection.id,
+                      text: connectionTextFor(project, connection, myKeys),
+                    }),
+                  );
                   return (
                     <FragmentRow
                       key={device.id}
                       device={device}
                       placed={placed}
+                      connections={connections}
                       detail={detail}
                       onToggle={() => setDetailId(detail ? null : device.id)}
                       onJump={onJump}
@@ -195,6 +208,7 @@ export function DevicePanel({ open, focusId, project, onClose, onJump, onPlace, 
                       onUnplace={onUnplace}
                       onUpsert={onUpsert}
                       onDelete={onDelete}
+                      onRemoveConnection={onRemoveConnection}
                     />
                   );
                 })}
@@ -218,6 +232,7 @@ export function DevicePanel({ open, focusId, project, onClose, onJump, onPlace, 
 function FragmentRow({
   device,
   placed,
+  connections,
   detail,
   onToggle,
   onJump,
@@ -225,9 +240,12 @@ function FragmentRow({
   onUnplace,
   onUpsert,
   onDelete,
+  onRemoveConnection,
 }: {
   device: Device;
   placed: Placement[];
+  /** 이 장치가 낀 연결 — 방향과 상대편을 적은 한 줄씩. */
+  connections: Array<{ id: string; text: string }>;
   detail: boolean;
   onToggle: () => void;
   onJump: DevicePanelProps["onJump"];
@@ -235,6 +253,7 @@ function FragmentRow({
   onUnplace: DevicePanelProps["onUnplace"];
   onUpsert: DevicePanelProps["onUpsert"];
   onDelete: DevicePanelProps["onDelete"];
+  onRemoveConnection: DevicePanelProps["onRemoveConnection"];
 }) {
   const first = placed[0];
   return (
@@ -297,6 +316,34 @@ function FragmentRow({
           <td colSpan={6} className="px-3 py-2">
             <div className="flex flex-col gap-2">
               <DeviceForm key={deviceFormKey(device)} device={device} onUpsert={onUpsert} />
+              {connections.length > 0 ? (
+                <div>
+                  <p className="mb-0.5 text-[10px] font-semibold tracking-wide text-slate-500">
+                    연결 ({connections.length})
+                  </p>
+                  <ul className="flex flex-col gap-0.5">
+                    {connections.map((connection) => (
+                      <li
+                        key={connection.id}
+                        className="flex items-center gap-1 border border-slate-200 bg-white px-1.5 py-0.5"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-[11px] text-slate-700" title={connection.text}>
+                          {connection.text}
+                        </span>
+                        <button
+                          type="button"
+                          className="h-4 w-4 shrink-0 border border-slate-400 bg-white text-[10px] leading-none text-slate-700 hover:bg-red-50 hover:text-red-700"
+                          onClick={() => onRemoveConnection(connection.id)}
+                          title="이 연결을 지운다 (Ctrl+Z 로 되돌릴 수 있습니다)"
+                          aria-label={`연결 지우기: ${connection.text}`}
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {placed.length > 1 ? (
                 <div className="flex flex-wrap gap-1">
                   {placed.map((placement) => (

@@ -10,6 +10,7 @@ import {
   type WireId,
 } from "./palette";
 import type { PagePaper } from "./paper";
+import { type Connection, type ConnectionSegment, connectionSegmentsOnPage } from "./connection";
 import type { Device } from "./device";
 import type { Zone } from "./zone";
 import { sanitizeZones } from "./zone";
@@ -101,6 +102,11 @@ export interface ProjectDoc {
    * 페이지가 아니라 프로젝트에 담는다 — 장치를 다른 방으로 옮겨도 같은 항목이다.
    */
   devices?: Device[];
+  /**
+   * 논리 연결(`connection.ts`). 끝점은 대장의 장치(옮겨도 따라감)거나
+   * 도면의 칸(대장에 없는 계획 지점)이다. 배선 레이어(물리 경로 그림)와는 별개다.
+   */
+  connections?: Connection[];
 }
 
 /** 단일 페이지 호환성 및 기존 렌더러용 뷰 타입 */
@@ -119,6 +125,11 @@ export interface LayoutDoc {
   zones?: Zone[];
   /** 구역을 그리지 않는다. 렌더러는 `visible["zones"]` 로도 같은 판정을 받는다. */
   zonesHidden?: true;
+  /**
+   * 이 페이지에서 양끝이 풀린 연결(`connection.ts`). 켜고 끄는 것은
+   * `visible[CONNECTION_LAYER_ID]` 다 — 화면·PNG·인쇄가 같은 판정을 받는다.
+   */
+  connectionSegments?: ConnectionSegment[];
 }
 
 /** 칸을 담고 있는 것 — `PageDoc` 과 `LayoutDoc` 이 모두 만족한다. */
@@ -242,6 +253,7 @@ export function activePage(project: ProjectDoc): PageDoc {
 /** 프로젝트의 현재 활성 페이지와 팔레트를 결합하여 렌더러용 LayoutDoc 뷰를 생성한다. */
 export function activeLayoutDoc(project: ProjectDoc): LayoutDoc {
   const page = activePage(project);
+  const connectionSegments = connectionSegmentsOnPage(project, page.id);
   return {
     version: project.version,
     title: `${project.title} - ${page.name}`,
@@ -253,6 +265,7 @@ export function activeLayoutDoc(project: ProjectDoc): LayoutDoc {
     ...(page.layerCells ? { layerCells: page.layerCells } : {}),
     ...(page.zones ? { zones: page.zones } : {}),
     ...(page.zonesHidden ? { zonesHidden: true as const } : {}),
+    ...(connectionSegments.length > 0 ? { connectionSegments } : {}),
     layers: project.layers,
     palette: project.palette,
   };

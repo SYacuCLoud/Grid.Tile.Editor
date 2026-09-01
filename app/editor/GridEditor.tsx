@@ -2,16 +2,19 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CellNotePopover } from "./CellNotePopover";
+import { connectionEndKey, connectionsAtCell } from "./connection";
+import { connectionEndText, connectionTextFor } from "./connectionText";
+import { ConnectionOverlay } from "./ConnectionOverlay";
 import { deviceById, deviceLabel } from "./device";
 import { DevicePanel } from "./DevicePanel";
 import { legendBandCells, legendColumns, sheetCells } from "./paper";
-import { cellPhotos, parseCellKey } from "./doc";
+import { cellKey, cellPhotos, parseCellKey } from "./doc";
 import { GridCanvas } from "./GridCanvas";
 import { InspectorPanel } from "./InspectorPanel";
 import { PageTabs } from "./PageTabs";
 import { PalettePanel } from "./PalettePanel";
 import { legendItemsForPage } from "./paletteOps";
-import { canvasCells, renderSheet, sheetPixelSize } from "./render";
+import { canvasCells, connectionEndColors, renderSheet, sheetPixelSize } from "./render";
 import { Ruler, RulerCorner } from "./Ruler";
 import { HistoryPanel } from "./server/HistoryPanel";
 import { ServerBar } from "./server/ServerBar";
@@ -460,6 +463,52 @@ export function GridEditor() {
     [printGuide, printLegend?.bandCells, state.doc],
   );
 
+  // 우클릭한 칸이 낀 연결들 — 상자에 방향(→ 나가는 / ← 들어오는)과 상대편을 보인다.
+  const noteConnections = useMemo(() => {
+    if (!state.noteKey) return [];
+    const deviceId = state.doc.equipment[state.noteKey]?.deviceId;
+    const myKeys = new Set([
+      connectionEndKey({ page: state.project.activePageId, cell: state.noteKey }),
+      ...(deviceId ? [connectionEndKey({ device: deviceId })] : []),
+    ]);
+    return connectionsAtCell(
+      state.project.connections,
+      state.project.activePageId,
+      state.noteKey,
+      deviceId,
+    ).map((connection) => ({
+      id: connection.id,
+      text: connectionTextFor(state.project, connection, myKeys),
+    }));
+  }, [state.doc.equipment, state.noteKey, state.project]);
+
+  // 호버한 칸이 낀 연결. 오버레이가 애니메이션으로 얹는다 — «연결» 체크(항상
+  // 표시)와 무관하게, 칸에 마우스만 올리면 그 칸의 연결이 흐른다.
+  const hoverSegments = useMemo(() => {
+    const segments = state.doc.connectionSegments;
+    if (!segments || !state.hover) return [];
+    const key = cellKey(state.hover.x, state.hover.y);
+    const deviceId = state.doc.equipment[key]?.deviceId;
+    const ids = new Set(
+      connectionsAtCell(state.project.connections, state.project.activePageId, key, deviceId).map(
+        (connection) => connection.id,
+      ),
+    );
+    return segments.filter((segment) => ids.has(segment.connection.id));
+  }, [
+    state.doc.connectionSegments,
+    state.doc.equipment,
+    state.hover,
+    state.project.activePageId,
+    state.project.connections,
+  ]);
+
+  // 호버 연결의 양끝 색 — 캔버스(정지 그림)와 같은 규칙으로 뽑는다.
+  const hoverColors = useMemo(
+    () => connectionEndColors(state.doc, hoverSegments),
+    [hoverSegments, state.doc],
+  );
+
   // 선택 도구에서 이름표 위에 오면 커서를 바꾼다 — 끌 수 있다는 표시가 없으면
   // 이름표를 옮길 수 있다는 것을 아무도 모른다.
   const overZoneLabel =
@@ -488,6 +537,8 @@ export function GridEditor() {
         hasClipboard={!!state.clipboard}
         showGrid={state.showGrid}
         showRuler={state.showRuler}
+        showConnections={state.showConnections}
+        connectionCount={state.project.connections?.length ?? 0}
         cell={state.cell}
         onTitle={actions.setTitle}
         onTool={actions.setTool}
@@ -498,6 +549,7 @@ export function GridEditor() {
         onPaste={actions.paste}
         onShowGrid={actions.setShowGrid}
         onShowRuler={actions.setShowRuler}
+        onShowConnections={actions.setShowConnections}
         onZoom={actions.zoomBy}
         onExportJson={exportJson}
         onImportJson={importJson}
@@ -528,6 +580,7 @@ export function GridEditor() {
         onUnplace={actions.unplaceDevice}
         onUpsert={actions.upsertDevice}
         onDelete={actions.deleteDevice}
+        onRemoveConnection={actions.removeConnection}
       />
 
       {placingDevice ? (
@@ -540,6 +593,24 @@ export function GridEditor() {
               type="button"
               className="border border-slate-500 bg-slate-700 px-2 py-0.5 text-[11px] hover:bg-slate-600"
               onClick={actions.cancelPlacing}
+              title="Esc"
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {state.connectingFrom ? (
+        <div className="fixed inset-x-0 top-2 z-40 flex justify-center">
+          <div className="flex items-center gap-2 border border-blue-800 bg-blue-700 px-3 py-1.5 text-[12px] text-white shadow-lg">
+            <span>
+              연결 긋는 중: {connectionEndText(state.project, state.connectingFrom)} → 도착 칸을 클릭하세요
+            </span>
+            <button
+              type="button"
+              className="border border-blue-400 bg-blue-600 px-2 py-0.5 text-[11px] hover:bg-blue-500"
+              onClick={actions.cancelConnecting}
               title="Esc"
             >
               취소
@@ -621,6 +692,13 @@ export function GridEditor() {
               actions.endStroke(null);
             }}
           >
+            <ConnectionOverlay
+              segments={hoverSegments}
+              colors={hoverColors}
+              cell={state.cell}
+              cols={state.doc.cols}
+              rows={state.doc.rows}
+            />
             {noteCell ? (
               <CellNotePopover
                 key={noteCell.key}
@@ -635,6 +713,9 @@ export function GridEditor() {
                 pageId={state.project.activePageId}
                 pageName={state.activePageDoc.name}
                 caption={noteCaption}
+                cellConnections={noteConnections}
+                onStartConnect={() => actions.startConnecting(noteCell.key)}
+                onRemoveConnection={actions.removeConnection}
                 {...(() => {
                   const linked = deviceById(state.project.devices, state.doc.equipment[noteCell.key]?.deviceId);
                   if (linked) {

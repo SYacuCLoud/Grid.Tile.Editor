@@ -1,4 +1,5 @@
 import { type EquipmentCell, DOC_VERSION, type LayerCells, type PageDoc, type ProjectDoc } from "./doc";
+import { sanitizeConnections } from "./connection";
 import { sanitizeDevices } from "./device";
 import { type LayerDef, sanitizeLayers } from "./layers";
 import { ensurePalette } from "./paletteOps";
@@ -109,6 +110,7 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
         : pages[0].id;
 
     const devices = sanitizeDevices(raw.devices);
+    const connections = sanitizeConnections(raw.connections, devices, pages);
 
     return {
       version: typeof raw.version === "number" ? raw.version : DOC_VERSION,
@@ -118,6 +120,7 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
       layers,
       palette: ensurePalette(raw.palette),
       ...(devices ? { devices } : {}),
+      ...(connections ? { connections } : {}),
     };
   }
 

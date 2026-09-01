@@ -215,6 +215,21 @@ export function textColorOn(background: string | undefined): string {
 }
 
 /**
+ * 흰 종이 위에 바로 긋는 선의 잉크색. 색이 없으면 대신색을, 너무 밝은 색
+ * (통로색·흰색처럼 흰 바탕에 묻히는 색)은 어둡게 눌러 돌려준다 — 연결선이
+ * 끝점 칸의 색을 물려받을 때 쓴다.
+ */
+export function inkOnPaper(color: string | null | undefined, fallback: string): string {
+  if (!color) return fallback;
+  const rgb = parseHex(color);
+  if (!rgb) return color;
+  const luminance = (rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114) / 255;
+  if (luminance <= 0.8) return color;
+  const pressed = rgb.map((channel) => Math.round(channel * 0.55).toString(16).padStart(2, "0"));
+  return `#${pressed.join("")}`;
+}
+
+/**
  * 배선의 기본 불투명도.
  *
  * 배선은 도면 위를 가로질러 지나간다. 진하게 깔면 그 아래의 배경·설비가 가려져
