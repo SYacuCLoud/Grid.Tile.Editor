@@ -12,8 +12,11 @@ import { API_BASE, parsePath, routeProjects, statusOf } from "./projectsRouter";
 
 export { API_BASE };
 
-/** 몸통이 지나치게 크면 읽지 않는다. 도면 하나가 이보다 커질 일은 없다. */
-const MAX_BODY_BYTES = 8 * 1024 * 1024;
+/**
+ * 몸통이 지나치게 크면 읽지 않는다.
+ * 사진은 720p WebP 로 담기므로(한 장 600KB 안) 도면 하나가 이보다 커질 일은 없다.
+ */
+const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 function sendJson(res: ServerResponse, status: number, payload: unknown) {
   res.statusCode = status;

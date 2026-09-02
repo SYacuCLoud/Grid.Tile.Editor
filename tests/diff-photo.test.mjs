@@ -12,7 +12,9 @@ import {
   formatBytes,
   MAX_CELL_PHOTO_CHARS,
   MAX_CELL_PHOTOS,
+  MAX_EDGE,
   MAX_PHOTO_CHARS,
+  MAX_SHORT_EDGE,
   photoBytes,
   photosBytes,
   sanitizePhoto,
@@ -313,6 +315,19 @@ test("사진 크기: 긴 변만 맞추고 비율은 지킨다", () => {
   assert.deepEqual(fitSize(1000, 2000, 480), { width: 240, height: 480 });
   // 이미 작으면 건드리지 않는다.
   assert.deepEqual(fitSize(300, 200, 480), { width: 300, height: 200 });
+});
+
+test("사진 크기: 기본은 720p 급 — 짧은 변 720 · 긴 변 1280 안", () => {
+  assert.equal(MAX_SHORT_EDGE, 720);
+  assert.equal(MAX_EDGE, 1280);
+  // 4:3 휴대폰 사진은 짧은 변이 먼저 걸려 960×720.
+  assert.deepEqual(fitSize(4032, 3024), { width: 960, height: 720 });
+  // 16:9 는 두 변이 함께 걸려 1280×720.
+  assert.deepEqual(fitSize(3840, 2160), { width: 1280, height: 720 });
+  // 세로 사진도 같은 규칙(720×960).
+  assert.deepEqual(fitSize(3024, 4032), { width: 720, height: 960 });
+  // 720p 보다 작은 사진은 키우지 않는다.
+  assert.deepEqual(fitSize(800, 600), { width: 800, height: 600 });
 });
 
 test("사진 크기 표시: 사람이 읽는 단위로 바꾼다", () => {
