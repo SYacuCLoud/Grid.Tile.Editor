@@ -11,6 +11,7 @@ import { legendBand, sheetCells } from "./paper";
 import { cellKey, cellPhotos, parseCellKey } from "./doc";
 import { GridCanvas } from "./GridCanvas";
 import { InspectorPanel } from "./InspectorPanel";
+import { PaperModal } from "./PaperModal";
 import { PageTabs } from "./PageTabs";
 import { PalettePanel } from "./PalettePanel";
 import { legendItemsForPage } from "./paletteOps";
@@ -204,6 +205,8 @@ export function GridEditor() {
 
   // 장치 대장 목록 상자. 열 때 특정 장치를 바로 펼칠 수 있다(칸 우클릭 → 수정).
   const [devicePanel, setDevicePanel] = useState<{ focusId?: string } | null>(null);
+  /** 인쇄 용지 규격 모달. 툴바의 `용지 설정` 단추로 연다. */
+  const [paperOpen, setPaperOpen] = useState(false);
   /** 배치 모드에 든 장치. 배너에 이름을 적는 데만 쓴다. */
   const placingDevice = deviceById(state.project.devices, state.placingDeviceId ?? undefined);
   const jumpToDevice = useCallback(
@@ -403,19 +406,18 @@ export function GridEditor() {
   })();
 
   // 인쇄 경계선은 화면에서만 그린다. PNG 내보내기에는 넘기지 않는다.
-  const printGuide = useMemo(
-    () => (state.activePageDoc.paper ? sheetCells(state.activePageDoc.paper) : null),
-    [state.activePageDoc.paper],
-  );
+  // `인쇄 경계선 보기` 를 끄면 용지는 그대로 두고(PNG 는 여전히 용지 규격) 화면만 격자로 돌아간다.
+  const screenPaper = state.showPrintGuides ? state.activePageDoc.paper : undefined;
+  const printGuide = useMemo(() => (screenPaper ? sheetCells(screenPaper) : null), [screenPaper]);
 
   // 인쇄물에는 도면 아래로 범례가 함께 실린다. 그 자리를 경계선 안에 미리 잡아 둔다.
   const printLegend = useMemo(() => {
-    const paper = state.activePageDoc.paper;
+    const paper = screenPaper;
     if (!paper || legend.length === 0) return null;
     // 마지막 장 남은 행에 안 들어가면 띠를 줄여 맞춘다 — 인쇄 · 장수 계산과 같은 셈이다.
     const band = legendBand(paper, legend.length, state.doc.cols, state.doc.rows);
     return { items: legend, bandCells: band.bandCells, columns: band.columns };
-  }, [legend, state.activePageDoc.paper, state.doc.cols, state.doc.rows]);
+  }, [legend, screenPaper, state.doc.cols, state.doc.rows]);
 
   /**
    * 인쇄물에 실릴 메모 본문의 자리. 경계선 안에 미리 그려 둔다.
@@ -425,7 +427,7 @@ export function GridEditor() {
    * 미리보기에서 뺀다 — 종이에서 도면 뒤에 따로 붙는다.
    */
   const printMemo = useMemo(() => {
-    const paper = state.activePageDoc.paper;
+    const paper = screenPaper;
     if (!paper) return null;
     const memoMode = paper.memoMode ?? DEFAULT_MEMO_MODE;
     if (memoMode !== "inline" || memos.length === 0) return null;
@@ -452,7 +454,7 @@ export function GridEditor() {
       lineMm: MEMO_LINE_MM,
       textMm: MEMO_TEXT_MM,
     };
-  }, [legend.length, memos, state.activePageDoc.paper, state.doc]);
+  }, [legend.length, memos, screenPaper, state.doc]);
 
   // 눈금자는 캔버스와 같은 칸 수를 써야 도면과 어긋나지 않는다.
   // 인쇄 경계선을 켜면 캔버스가 용지 범위까지 넓어진다는 점까지 같이 본다.
@@ -552,6 +554,12 @@ export function GridEditor() {
         onExportJson={exportJson}
         onImportJson={importJson}
         onExportPng={exportPng}
+        paper={state.activePageDoc.paper}
+        showPrintGuides={state.showPrintGuides}
+        memoCount={memos.length}
+        onPaper={actions.setPaper}
+        onShowPrintGuides={actions.setShowPrintGuides}
+        onOpenPaper={() => setPaperOpen(true)}
         photoCount={photoEntries.length}
         onPrintPhotoLedger={printPhotoLedger}
         onDownloadPhotos={downloadAllPhotos}
@@ -563,6 +571,18 @@ export function GridEditor() {
 
       <ServerBar state={server} actions={server.actions} />
       <HistoryPanel state={server} actions={server.actions} />
+
+      <PaperModal
+        open={paperOpen}
+        pageName={state.activePageDoc.name}
+        paper={state.activePageDoc.paper}
+        cols={state.doc.cols}
+        rows={state.doc.rows}
+        legendCount={legend.length}
+        memos={memos}
+        onChange={actions.setPaper}
+        onClose={() => setPaperOpen(false)}
+      />
 
       <DevicePanel
         key={devicePanel?.focusId ?? "plain"}
@@ -624,6 +644,9 @@ export function GridEditor() {
         onAddPage={actions.addPage}
         onRenamePage={actions.renamePage}
         onDeletePage={actions.deletePage}
+        cols={state.doc.cols}
+        rows={state.doc.rows}
+        onSize={actions.setSize}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -762,16 +785,12 @@ export function GridEditor() {
           selectionRange={state.selectionRange}
           hasClipboard={!!state.clipboard}
           devices={state.project.devices ?? []}
-          onSize={actions.setSize}
-          paper={state.activePageDoc.paper}
-          legendCount={legend.length}
-          memos={memos}
-          onPaper={actions.setPaper}
           zones={zones}
           onPick={() => actions.setTool("pick")}
           onCopy={actions.copy}
           onCut={actions.cut}
           onPaste={actions.paste}
+          onCellStyle={actions.setInfo}
         />
       </div>
 

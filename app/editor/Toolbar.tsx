@@ -2,6 +2,8 @@
 
 import pkg from "../../package.json";
 import { BUILT_AT } from "./buildInfo";
+import type { PagePaper } from "./paper";
+import { PrintOptions } from "./PrintOptions";
 import { TOOLS, type ToolId } from "./useEditor";
 
 const BUTTON = "h-8 px-3 border border-slate-300 bg-white text-[13px] text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-white";
@@ -118,6 +120,15 @@ interface ToolbarProps {
   onExportJson: () => void;
   onImportJson: () => void;
   onExportPng: () => void;
+  /** 활성 페이지의 인쇄 용지. 둘째 줄 왼쪽의 인쇄 옵션이 이 값을 고친다. */
+  paper: PagePaper | undefined;
+  /** 화면에 인쇄 경계선을 그릴지. */
+  showPrintGuides: boolean;
+  memoCount: number;
+  onPaper: (paper: PagePaper | null) => void;
+  onShowPrintGuides: (value: boolean) => void;
+  /** 용지 규격 모달을 연다. */
+  onOpenPaper: () => void;
   /** 도면에 붙은 사진 총 장수. 0 이면 사진 대장 단추를 잠근다. */
   photoCount: number;
   onPrintPhotoLedger: () => void;
@@ -237,7 +248,17 @@ export function Toolbar(props: ToolbarProps) {
         </span>
       </div>
 
-      <div className="flex flex-wrap items-center justify-end gap-1">
+      {/* 둘째 줄 — 왼쪽은 인쇄 옵션, 오른쪽은 내보내기 · 대장 · 초기화. */}
+      <div className="flex flex-wrap items-center gap-1">
+        <PrintOptions
+          paper={props.paper}
+          showGuides={props.showPrintGuides}
+          memoCount={props.memoCount}
+          onPaper={props.onPaper}
+          onShowGuides={props.onShowPrintGuides}
+          onOpenPaper={props.onOpenPaper}
+        />
+        <div className="ml-auto flex flex-wrap items-center gap-1">
         <button type="button" className={BUTTON} onClick={props.onExportPng} title="현재 선택된 페이지의 배치도 및 범례를 PNG 이미지로 내보냅니다">
           PNG 저장 (현재 페이지)
         </button>
@@ -291,6 +312,7 @@ export function Toolbar(props: ToolbarProps) {
         >
           전체 초기화
         </button>
+        </div>
       </div>
     </header>
   );

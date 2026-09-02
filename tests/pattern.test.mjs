@@ -141,9 +141,9 @@ test("도면 렌더: 상태·배경 칸에 무늬가 적용된다", () => {
 test("도면 렌더: 장비 테두리와 배선이 선 모양을 따른다", () => {
   const project = createProject("선 모양 렌더");
   const page = project.pages[0];
-  setLineStyle(project, "reader", "dashed");
+  // 장비 테두리의 선 모양은 팔레트가 아니라 칸이 정한다.
   setLineStyle(project, "wirePurple", "dotted");
-  page.equipment["2,2"] = { kind: "reader" };
+  page.equipment["2,2"] = { kind: "reader", lineStyle: "dashed" };
   page.wiring["4,4"] = "wirePurple";
   page.wiring["5,4"] = "wirePurple";
 
@@ -180,9 +180,9 @@ test("PNG 범례: 견본이 도면과 같은 무늬·선 모양으로 그려진�
   const project = createProject("범례 무늬");
   const page = project.pages[0];
   setPattern(project, "installed", "hatch");
-  setLineStyle(project, "reader", "dotted");
   setLineStyle(project, "wirePurple", "dashed");
-  page.equipment["1,1"] = { status: "installed", kind: "reader" };
+  // 장비 테두리 선 모양은 칸이 정한다 — 범례 견본은 항목을 보이므로 실선이다.
+  page.equipment["1,1"] = { status: "installed", kind: "reader", lineStyle: "dotted" };
   page.wiring["2,2"] = "wirePurple";
 
   const ctx = recordingContext();
@@ -192,10 +192,10 @@ test("PNG 범례: 견본이 도면과 같은 무늬·선 모양으로 그려진�
   assert.ok(ctx.ops.some((op) => op.op === "clip"));
   assert.ok(ctx.ops.some((op) => op.op === "stroke" && op.color === "#57a639"));
 
-  // 장비 견본은 점선 테두리로 그린다.
-  const kindBox = ctx.ops.find((op) => op.op === "strokeRect" && op.color === "#0f766e");
-  assert.ok(kindBox);
-  assert.ok(kindBox.dash.length > 0);
+  // 도면의 칸은 점선 테두리, 범례 견본은 실선 테두리다(선 모양은 칸마다 다르므로 견본에 없다).
+  const kindBoxes = ctx.ops.filter((op) => op.op === "strokeRect" && op.color === "#0f766e");
+  assert.ok(kindBoxes.some((op) => op.dash.length > 0), "도면 칸은 점선");
+  assert.ok(kindBoxes.some((op) => op.dash.length === 0), "범례 견본은 실선");
 
   // 배선 견본은 칸을 채우지 않고 가로지르는 파선으로 그린다.
   const wireLine = ctx.ops.find((op) => op.op === "stroke" && op.color === "#7c3aed");

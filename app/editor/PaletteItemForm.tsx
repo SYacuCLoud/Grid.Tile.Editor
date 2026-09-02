@@ -42,8 +42,10 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
   const [error, setError] = useState<string | null>(null);
 
   // 칸을 통째로 채우는 분류만 무늬를 쓴다. 장비는 테두리로, 배선은 경로 선으로 보인다.
+  // 장비의 선 모양 · 진하기는 항목이 아니라 칸마다 정한다(칸 우클릭 → 칸 정보).
   const showPattern = props.role !== "kind" && props.role !== "wire";
-  const showLineStyle = props.role === "kind" || props.role === "wire";
+  const showLineStyle = props.role === "wire";
+  const showOpacity = props.role !== "kind";
 
   const submit = () => {
     const message = props.onSubmit({
@@ -52,7 +54,7 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
       description,
       ...(showPattern ? { pattern } : {}),
       ...(showLineStyle ? { lineStyle } : {}),
-      opacity,
+      ...(showOpacity ? { opacity } : {}),
     });
     if (message) setError(message);
   };
@@ -118,14 +120,12 @@ export function PaletteItemForm(props: PaletteItemFormProps) {
       />
 
       {showPattern ? <PatternPicker color={color} value={pattern} onPick={setPattern} /> : null}
-      <OpacityPicker color={color} value={opacity} onPick={setOpacity} fallback={fallbackOpacity} />
-      {showLineStyle ? (
-        <LineStylePicker
-          color={color}
-          value={lineStyle}
-          onPick={setLineStyle}
-          hint={props.role === "kind" ? "칸 테두리" : "배선 경로"}
-        />
+      {showOpacity ? (
+        <OpacityPicker color={color} value={opacity} onPick={setOpacity} fallback={fallbackOpacity} />
+      ) : null}
+      {showLineStyle ? <LineStylePicker color={color} value={lineStyle} onPick={setLineStyle} hint="배선 경로" /> : null}
+      {props.role === "kind" ? (
+        <p className="mt-1.5 text-[10px] text-slate-400">선 모양 · 진하기는 칸마다 정합니다 — 칸을 우클릭해 고치세요.</p>
       ) : null}
 
       {error ? <p className="mt-1 text-[11px] text-red-700">{error}</p> : null}

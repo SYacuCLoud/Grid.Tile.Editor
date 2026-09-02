@@ -72,11 +72,13 @@ import {
   pasteClipboard,
 } from "./range";
 import type { PagePaper } from "./paper";
+import type { LineStyle } from "./pattern";
 import type { Zone } from "./zone";
 import {
   addConnectionToProject,
   CONNECTION_LAYER_ID,
   type ConnectionEnd,
+  moveCellEndpoints,
   removeConnectionFromProject,
 } from "./connection";
 import { contextMenuFor, moveZoneLabel, ZONE_LAYER_ID, zoneLabelAt } from "./zone";
@@ -142,6 +144,8 @@ export interface EditorState {
   showGrid: boolean;
   /** 칸 번호 눈금자를 도면 위·왼쪽에 붙일지. */
   showRuler: boolean;
+  /** 인쇄 경계선(자홍색 점선 · 범례 띠 · 메모 자리)을 화면에 그릴지. 용지가 있을 때만 뜻이 있다. */
+  showPrintGuides: boolean;
   /** 연결선을 항상 표시할지(PNG·인쇄 포함). 꺼도 호버 애니메이션은 산다. */
   showConnections: boolean;
   cell: number;
@@ -214,6 +218,7 @@ export function useEditor() {
   const [activeLayer, setActiveLayer] = useState<LayerId>("equipment");
   const [showGrid, setShowGrid] = useState(true);
   const [showRuler, setShowRuler] = useState(true);
+  const [showPrintGuides, setShowPrintGuides] = useState(true);
   /** 연결선을 항상 표시(출력 포함). 꺼도 호버 애니메이션은 동작한다. */
   const [showConnections, setShowConnections] = useState(false);
   const [cell, setCell] = useState(22);
@@ -542,8 +547,9 @@ export function useEditor() {
     if (!selectionRange) return;
     const { nextDoc, data } = cutRange(doc, selectionRange, { locked: lockedLayerIds(project.layers) });
     applyEdit((current) => updateActivePage(current, (page) => writeCells(page, nextDoc)));
-    setClipboard(data);
-  }, [applyEdit, doc, project.layers, selectionRange]);
+    // 어디서 잘라냈는지 함께 든다 — 붙여넣기가 그 자리를 가리키던 연결을 따라 옮긴다.
+    setClipboard({ ...data, cutFrom: { pageId: project.activePageId, range: selectionRange } });
+  }, [applyEdit, doc, project.activePageId, project.layers, selectionRange]);
 
   const paste = useCallback(() => {
     if (!clipboard) return;
@@ -556,7 +562,18 @@ export function useEditor() {
     const { nextDoc, pastedRange } = pasteClipboard(doc, clipboard, origin, {
       locked: lockedLayerIds(project.layers),
     });
-    applyEdit((current) => updateActivePage(current, (page) => writeCells(page, nextDoc)));
+    const cutFrom = clipboard.cutFrom;
+    applyEdit((current) => {
+      const written = updateActivePage(current, (page) => writeCells(page, nextDoc));
+      if (!cutFrom) return written;
+      // 잘라낸 범위를 가리키던 칸 끝점을 붙인 자리로. 장치 끝점은 deviceId 가 칸과 함께 옮겨져 저절로 따라간다.
+      return moveCellEndpoints(written, {
+        from: { pageId: cutFrom.pageId, ...cutFrom.range },
+        to: { pageId: current.activePageId, origin: { x: pastedRange.minX, y: pastedRange.minY } },
+      });
+    });
+    // 옮기기는 한 번이다. 같은 클립보드를 다시 붙이면 복사다.
+    if (cutFrom) setClipboard({ ...clipboard, cutFrom: undefined });
     setSelectionRange(pastedRange);
     setSelectedKey(cellKey(pastedRange.minX, pastedRange.minY));
     setTool("pick");
@@ -623,8 +640,12 @@ export function useEditor() {
     [applyEdit],
   );
 
+  /**
+   * 칸의 글자 · 메모 · 장비 테두리(선 모양 · 진하기)를 바로 고친다. 오른쪽 패널이
+   * 칩을 누를 때마다 부른다 — 저장 단추 없이 한 번에 한 값씩 바뀐다.
+   */
   const setInfo = useCallback(
-    (key: string, patch: { label?: string; memo?: string }) => {
+    (key: string, patch: { label?: string; memo?: string; lineStyle?: LineStyle; opacity?: number }) => {
       applyEdit((current) => updateActivePage(current, (page) => updateEquipmentInfoOnPage(page, key, patch)));
     },
     [applyEdit],
@@ -1079,6 +1100,7 @@ export function useEditor() {
       visible,
       showGrid,
       showRuler,
+      showPrintGuides,
       showConnections,
       cell,
       selectedKey,
@@ -1116,6 +1138,7 @@ export function useEditor() {
       selectionRange,
       showGrid,
       showRuler,
+      showPrintGuides,
       showConnections,
       tool,
       visible,
@@ -1141,6 +1164,7 @@ export function useEditor() {
       deleteLayer,
       setShowGrid,
       setShowRuler,
+      setShowPrintGuides,
       setShowConnections,
       zoomBy,
       undo,

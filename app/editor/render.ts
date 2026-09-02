@@ -1,5 +1,5 @@
 import { arcControlPoint, CONNECTION_COLOR, CONNECTION_LAYER_ID, type ConnectionSegment } from "./connection";
-import { cellKey, cellPhotos, type LayoutDoc, paintedCells, type Point } from "./doc";
+import { cellKey, cellOpacity, cellPhotos, type LayoutDoc, paintedCells, type Point } from "./doc";
 import { defaultLayers, type LayerDef } from "./layers";
 import {
   indexPalette,
@@ -467,13 +467,13 @@ function drawLegendSwatch(ctx: CanvasRenderingContext2D, item: PaletteItem, x: n
   const color = item.color as string;
 
   if (item.role === "kind") {
+    // 선 모양 · 진하기는 칸마다 다르므로 견본은 실선 · 불투명으로 둔다.
     ctx.fillStyle = PAPER;
     ctx.fillRect(x, y, box, box);
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
-    ctx.setLineDash(dashArray(item.lineStyle, 2));
-    ctx.strokeRect(x + 1, y + 1, box - 2, box - 2);
     ctx.setLineDash([]);
+    ctx.strokeRect(x + 1, y + 1, box - 2, box - 2);
     return;
   }
 
@@ -769,11 +769,19 @@ function drawEquipmentLayer(
     if (data.kind) {
       const kind = resolveItem(index, data.kind, "kind");
 
+      // 선 모양 · 진하기는 칸이 정한다(팔레트 항목이 아니라). 테두리와 이름 글자에 함께 먹인다 —
+      // 옅은 칸은 "아직 확정되지 않은 자리" 로 읽히므로 글자만 진하면 뜻이 어긋난다.
+      const alpha = cellOpacity(data);
+      if (alpha < 1) {
+        ctx.save();
+        ctx.globalAlpha = ctx.globalAlpha * alpha;
+      }
+
       // 장비 색은 테두리로 보인다. 상태 채움색을 가리지 않는다.
       if (kind.color) {
         ctx.strokeStyle = kind.color;
         ctx.lineWidth = 2;
-        ctx.setLineDash(dashArray(kind.lineStyle, 2));
+        ctx.setLineDash(dashArray(data.lineStyle, 2));
         ctx.strokeRect(px + 1, py + 1, cell - 2, cell - 2);
         ctx.setLineDash([]);
       }
@@ -785,6 +793,8 @@ function drawEquipmentLayer(
         const room = data.label ? cell * 0.4 : cell * 0.8;
         drawCenteredText(ctx, kind.name, px + cell / 2, cy, cell - 5, cell * 0.36, textColor, room);
       }
+
+      if (alpha < 1) ctx.restore();
     }
 
     if (data.label && cell >= 12) {

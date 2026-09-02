@@ -53,6 +53,19 @@ export function usesPattern(role: PaletteRole): boolean {
 }
 
 /**
+ * 선 모양을 항목이 정하는 분류. 배선만이다 — 장비 테두리의 선 모양은 칸마다
+ * 정한다(`EquipmentCell.lineStyle`). 같은 장비라도 칸에 따라 계획(파선)과 설치(실선)가 갈리기 때문이다.
+ */
+export function usesLineStyle(role: PaletteRole): boolean {
+  return role === "wire";
+}
+
+/** 진하기를 항목이 정하는 분류. 장비는 칸마다 정한다(`EquipmentCell.opacity`). */
+export function usesOpacity(role: PaletteRole): boolean {
+  return role !== "kind";
+}
+
+/**
  * 이름·색 검사.
  *
  * 같은 이름은 **같은 분류 안에서만** 막는다. `layerId` 를 주면 그 레이어까지
@@ -127,8 +140,9 @@ export function addPaletteEntry(
   // 기본값(솔리드 · 실선)은 저장하지 않는다. 예전 문서와 파일 모양이 같아진다.
   // 배선은 칸을 채우지 않으므로 무늬를 받지 않는다.
   if (usesPattern(role) && input.pattern && input.pattern !== DEFAULT_PATTERN) created.pattern = input.pattern;
-  if (input.lineStyle && input.lineStyle !== DEFAULT_LINE_STYLE) created.lineStyle = input.lineStyle;
-  const opacity = sanitizeOpacity(input.opacity);
+  // 장비의 선 모양 · 진하기는 칸이 정한다. 항목에는 남기지 않는다.
+  if (usesLineStyle(role) && input.lineStyle && input.lineStyle !== DEFAULT_LINE_STYLE) created.lineStyle = input.lineStyle;
+  const opacity = usesOpacity(role) ? sanitizeOpacity(input.opacity) : null;
   if (opacity !== null && opacity !== itemOpacity({ role })) created.opacity = opacity;
 
   return { palette: [...palette, created], created };
@@ -154,10 +168,10 @@ export function updatePaletteEntry(
 
     if (usesPattern(item.role) && input.pattern && input.pattern !== DEFAULT_PATTERN) next.pattern = input.pattern;
     else delete next.pattern;
-    if (input.lineStyle && input.lineStyle !== DEFAULT_LINE_STYLE) next.lineStyle = input.lineStyle;
+    if (usesLineStyle(item.role) && input.lineStyle && input.lineStyle !== DEFAULT_LINE_STYLE) next.lineStyle = input.lineStyle;
     else delete next.lineStyle;
 
-    const opacity = sanitizeOpacity(input.opacity);
+    const opacity = usesOpacity(item.role) ? sanitizeOpacity(input.opacity) : null;
     if (opacity !== null && opacity !== itemOpacity({ role: item.role })) next.opacity = opacity;
     else delete next.opacity;
 
@@ -347,9 +361,10 @@ export function ensurePalette(raw: unknown): PaletteItem[] {
     const pattern = sanitizePattern(candidate.pattern);
     // 예전 파일에 배선 무늬가 남아 있어도 버린다. 배선은 선 모양만 쓴다.
     if (usesPattern(candidate.role) && pattern && pattern !== DEFAULT_PATTERN) item.pattern = pattern;
-    const lineStyle = sanitizeLineStyle(candidate.lineStyle);
+    // 장비 항목에 남은 옛 선 모양·진하기는 버린다 — 문서를 열 때 칸으로 내려보낸다(`storage.ts`).
+    const lineStyle = usesLineStyle(candidate.role) ? sanitizeLineStyle(candidate.lineStyle) : null;
     if (lineStyle && lineStyle !== DEFAULT_LINE_STYLE) item.lineStyle = lineStyle;
-    const opacity = sanitizeOpacity(candidate.opacity);
+    const opacity = usesOpacity(candidate.role) ? sanitizeOpacity(candidate.opacity) : null;
     // 분류의 기본값과 같으면 저장하지 않는다 — 예전 문서와 파일 모양이 같아진다.
     if (opacity !== null && opacity !== itemOpacity({ role: candidate.role })) item.opacity = opacity;
     if (candidate.retired === true) item.retired = true;

@@ -286,3 +286,70 @@ export function dropConnectionsOfDevice(project: ProjectDoc, deviceId: string): 
   else delete next.connections;
   return next;
 }
+
+/** 잘라낸 칸 무리가 어디서 어디로 갔는지. 붙여넣기가 칸 끝점을 따라 옮길 때 쓴다. */
+export interface CellMove {
+  from: { pageId: string; minX: number; minY: number; maxX: number; maxY: number };
+  to: { pageId: string; origin: Point };
+}
+
+/**
+ * 잘라낸 범위 안을 가리키던 칸 끝점을 붙여넣은 자리로 옮긴다.
+ *
+ * 장치 끝점은 `deviceId` 가 칸과 함께 옮겨지므로 저절로 따라가지만, 칸 끝점은
+ * 좌표 그대로여서 잘라내기·붙여넣기 뒤에 빈 자리를 가리키게 된다. 옮긴 자리가
+ * 대상 페이지 격자 밖이면(붙여넣기가 잘라낸 칸) 끝점은 그대로 둔다 — 칸 내용도
+ * 옮겨지지 않았으니 "잘라내고 붙이지 않은" 것과 같다.
+ *
+ * 옮긴 뒤 양끝이 같아진 연결은 버리고, 같은 쌍이 둘이 되면 옮겨 온 쪽을 남긴다 —
+ * 붙여넣기는 대상 블록을 통째로 바꾸므로 거기 있던 옛 연결이 밀려나는 것이 맞다.
+ */
+export function moveCellEndpoints(project: ProjectDoc, move: CellMove): ProjectDoc {
+  const connections = project.connections ?? [];
+  if (connections.length === 0) return project;
+  const target = project.pages.find((page) => page.id === move.to.pageId);
+  if (!target) return project;
+
+  const dx = move.to.origin.x - move.from.minX;
+  const dy = move.to.origin.y - move.from.minY;
+
+  const relocate = (end: ConnectionEnd): ConnectionEnd | null => {
+    if ("device" in end || end.page !== move.from.pageId) return null;
+    const [x, y] = end.cell.split(",").map(Number);
+    if (x < move.from.minX || x > move.from.maxX || y < move.from.minY || y > move.from.maxY) return null;
+    const nx = x + dx;
+    const ny = y + dy;
+    if (nx < 0 || ny < 0 || nx >= target.cols || ny >= target.rows) return null;
+    return { page: move.to.pageId, cell: `${nx},${ny}` };
+  };
+
+  let changed = false;
+  const moved: Connection[] = [];
+  const stayed: Connection[] = [];
+  for (const connection of connections) {
+    const from = relocate(connection.from);
+    const to = relocate(connection.to);
+    if (!from && !to) {
+      stayed.push(connection);
+      continue;
+    }
+    changed = true;
+    const next: Connection = { ...connection, from: from ?? connection.from, to: to ?? connection.to };
+    if (connectionEndKey(next.from) !== connectionEndKey(next.to)) moved.push(next);
+  }
+  if (!changed) return project;
+
+  const takenPairs = new Set(moved.map((connection) => pairKey(connection.from, connection.to)));
+  // 원래 순서를 지킨다 — 이력 diff 가 자리 바뀜을 변화로 읽지 않게.
+  const byId = new Map<string, Connection>();
+  for (const connection of stayed) {
+    if (!takenPairs.has(pairKey(connection.from, connection.to))) byId.set(connection.id, connection);
+  }
+  for (const connection of moved) byId.set(connection.id, connection);
+  const ordered = connections.filter((connection) => byId.has(connection.id)).map((connection) => byId.get(connection.id)!);
+
+  const next = { ...project };
+  if (ordered.length > 0) next.connections = ordered;
+  else delete next.connections;
+  return next;
+}

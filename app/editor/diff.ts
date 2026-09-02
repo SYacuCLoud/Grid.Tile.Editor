@@ -8,6 +8,7 @@
 
 import { cellPhotos, type CellHolder, type EquipmentCell, type PageDoc, type ProjectDoc, usedLayerIds } from "./doc";
 import type { PaletteItem } from "./palette";
+import { lineStyleName } from "./pattern";
 
 export type ChangeKind = "added" | "removed" | "changed";
 /** 레이어 ID. 기본 3종과 사용자 레이어 ID 가 함께 온다. */
@@ -74,6 +75,8 @@ function equipmentText(cell: EquipmentCell | undefined): string | null {
     cell.kind ? `장비=${cell.kind}` : null,
     cell.label ? `ID=${cell.label}` : null,
     cell.memo ? `메모=${cell.memo.replace(/\s+/g, " ").slice(0, 40)}` : null,
+    cell.lineStyle ? `선=${lineStyleName(cell.lineStyle)}` : null,
+    cell.opacity !== undefined ? `진하기=${Math.round(cell.opacity * 100)}%` : null,
     photoText(cell),
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : null;

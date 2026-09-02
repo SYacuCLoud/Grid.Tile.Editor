@@ -38,13 +38,13 @@ const ManagePaletteInput = z.object({
   lineStyle: z
     .enum(LINE_STYLE_IDS)
     .optional()
-    .describe("선 모양. 장비는 칸 테두리, 배선은 경로에 쓴다. 생략하면 실선"),
+    .describe("선 모양. 배선 경로에만 쓴다(장비 테두리는 칸마다 grid_set_cell 의 lineStyle 로 정한다). 생략하면 실선"),
   opacity: z
     .number()
     .gt(0)
     .lte(1)
     .optional()
-    .describe("진하기(0~1). 생략하면 분류 기본값 — 배선은 반투명(0.55), 나머지는 불투명"),
+    .describe("진하기(0~1). 생략하면 분류 기본값 — 배선은 반투명(0.55), 나머지는 불투명. 장비는 칸마다 정하므로 무시된다"),
   deleteMode: z
     .enum(["keepCells", "purgeCells"])
     .default("keepCells")

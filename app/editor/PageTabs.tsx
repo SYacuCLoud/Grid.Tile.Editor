@@ -1,19 +1,88 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { type PageDoc } from "./doc";
+import { MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, type PageDoc } from "./doc";
+
+const SIZE_FIELD =
+  "h-6 w-14 border border-slate-300 bg-white px-1 text-[12px] text-slate-900 outline-none focus:border-slate-600";
 
 interface PageTabsProps {
   pages: PageDoc[];
   activePageId: string;
+  /** 활성 페이지의 격자 크기. `페이지 추가` 옆에서 고친다 — 크기는 페이지의 속성이다. */
+  cols: number;
+  rows: number;
+  onSize: (cols: number, rows: number) => void;
   onSwitchPage: (pageId: string) => void;
   onAddPage: () => void;
   onRenamePage: (pageId: string, newName: string) => void;
   onDeletePage: (pageId: string) => void;
 }
 
+/**
+ * 활성 페이지의 격자 크기 — `페이지 추가` 바로 오른쪽. 입력하는 동안은 손의 값이고 `적용` 또는 Enter 로 넘긴다 —
+ * 칸 수가 바뀔 때마다 도면을 자르면 "20" 을 치는 중간의 "2" 에서 칸이 잘려 나간다.
+ * 문서 크기가 바뀌면 key 로 새로 마운트되어 손의 값이 문서를 따라간다.
+ */
+function SizeControls({ cols, rows, onSize }: { cols: number; rows: number; onSize: PageTabsProps["onSize"] }) {
+  const [nextCols, setNextCols] = useState(String(cols));
+  const [nextRows, setNextRows] = useState(String(rows));
+  const apply = () => onSize(Number(nextCols) || cols, Number(nextRows) || rows);
+  const onKey = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter") apply();
+  };
+  const dirty = Number(nextCols) !== cols || Number(nextRows) !== rows;
+
+  return (
+    <div
+      className="ml-3 flex shrink-0 items-center gap-1 border-l border-slate-300 pl-3 text-[11px] text-slate-600"
+      title="활성 페이지의 격자 크기. 줄이면 바깥으로 밀려난 칸은 지워진다"
+    >
+      <span className="font-semibold text-slate-500">격자 크기</span>
+      <label className="flex items-center gap-1">
+        가로
+        <input
+          className={SIZE_FIELD}
+          type="number"
+          min={MIN_COLS}
+          max={MAX_COLS}
+          value={nextCols}
+          onChange={(event) => setNextCols(event.target.value)}
+          onKeyDown={onKey}
+          aria-label="가로 칸"
+        />
+      </label>
+      <label className="flex items-center gap-1">
+        세로
+        <input
+          className={SIZE_FIELD}
+          type="number"
+          min={MIN_ROWS}
+          max={MAX_ROWS}
+          value={nextRows}
+          onChange={(event) => setNextRows(event.target.value)}
+          onKeyDown={onKey}
+          aria-label="세로 칸"
+        />
+      </label>
+      <button
+        type="button"
+        className={`h-6 border px-2 text-[12px] ${
+          dirty
+            ? "border-slate-800 bg-slate-800 text-white hover:bg-slate-700"
+            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+        }`}
+        onClick={apply}
+        title="크기 적용 (입력란에서 Enter)"
+      >
+        적용
+      </button>
+    </div>
+  );
+}
+
 export function PageTabs(props: PageTabsProps) {
-  const { pages, activePageId, onSwitchPage, onAddPage, onRenamePage, onDeletePage } = props;
+  const { pages, activePageId, cols, rows, onSize, onSwitchPage, onAddPage, onRenamePage, onDeletePage } = props;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState<string>("");
   const editInputRef = useRef<HTMLInputElement | null>(null);
@@ -128,6 +197,8 @@ export function PageTabs(props: PageTabsProps) {
         <span>+</span>
         <span>페이지 추가</span>
       </button>
+
+      <SizeControls key={`${activePageId}:${cols}x${rows}`} cols={cols} rows={rows} onSize={onSize} />
     </div>
   );
 }

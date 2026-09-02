@@ -2,11 +2,13 @@ import { z } from "zod";
 
 import { cellKey, eraseCellsOnPage, paintCellsOnPage, updateEquipmentInfoOnPage } from "../../app/editor/doc";
 import type { LayerId } from "../../app/editor/palette";
+import { LINE_STYLES, type LineStyle } from "../../app/editor/pattern";
 import { rectFillPoints, rectOutlinePoints } from "../../app/editor/shapes";
 import { assertInside, pickItem, pickPage, replacePage, summarizePage } from "../helpers";
 import { ToolError, type ToolDef } from "../types";
 
 const LAYERS = ["background", "equipment", "wiring"] as const;
+const LINE_STYLE_IDS = LINE_STYLES.map((item) => item.id) as [string, ...string[]];
 
 const SetCellInput = z.object({
   projectId: z.string().describe("프로젝트 ID"),
@@ -16,6 +18,16 @@ const SetCellInput = z.object({
   paletteId: z.string().optional().describe("칠할 팔레트 항목 ID. 항목의 분류에 따라 레이어가 정해진다"),
   label: z.string().max(24).optional().describe("장비 ID. 빈 문자열이면 지운다"),
   memo: z.string().max(500).optional().describe("칸 메모. 빈 문자열이면 지운다"),
+  lineStyle: z
+    .enum(LINE_STYLE_IDS)
+    .optional()
+    .describe("이 칸 장비 테두리의 선 모양(실선 solid · 점선 dotted · 파선 dashed). 칸마다 정한다"),
+  opacity: z
+    .number()
+    .gt(0)
+    .lte(1)
+    .optional()
+    .describe("이 칸 장비(테두리 · 이름)의 진하기(0 초과 ~ 1). 1 이면 불투명(기본)"),
   eraseLayer: z.enum(LAYERS).optional().describe("이 레이어의 내용을 지운다"),
 });
 
@@ -35,12 +47,14 @@ export const setCellTool: ToolDef = {
   name: "grid_set_cell",
   title: "칸 설정",
   description:
-    "한 칸에 팔레트 항목을 칠하고 장비 ID·메모를 붙인다. paletteId · label · memo · eraseLayer 를 한 번에 섞어 쓸 수 있다.",
+    "한 칸에 팔레트 항목을 칠하고 장비 ID·메모·장비 테두리 모양(lineStyle · opacity)을 붙인다. 여러 값을 한 번에 섞어 쓸 수 있다.",
   inputSchema: SetCellInput.shape,
   handler(rawArgs, store) {
     const args = SetCellInput.parse(rawArgs);
-    if (!args.paletteId && args.label === undefined && args.memo === undefined && !args.eraseLayer) {
-      throw new ToolError("paletteId · label · memo · eraseLayer 중 하나는 있어야 합니다.");
+    const hasInfo =
+      args.label !== undefined || args.memo !== undefined || args.lineStyle !== undefined || args.opacity !== undefined;
+    if (!args.paletteId && !hasInfo && !args.eraseLayer) {
+      throw new ToolError("paletteId · label · memo · lineStyle · opacity · eraseLayer 중 하나는 있어야 합니다.");
     }
 
     const project = store.read(args.projectId);
@@ -55,10 +69,12 @@ export const setCellTool: ToolDef = {
     if (args.paletteId) {
       page = paintCellsOnPage(page, pickItem(project, args.paletteId), [point]);
     }
-    if (args.label !== undefined || args.memo !== undefined) {
+    if (hasInfo) {
       page = updateEquipmentInfoOnPage(page, cellKey(args.x, args.y), {
         ...(args.label !== undefined ? { label: args.label } : {}),
         ...(args.memo !== undefined ? { memo: args.memo } : {}),
+        ...(args.lineStyle !== undefined ? { lineStyle: args.lineStyle as LineStyle } : {}),
+        ...(args.opacity !== undefined ? { opacity: args.opacity } : {}),
       });
     }
 

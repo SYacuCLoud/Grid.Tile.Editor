@@ -2,8 +2,10 @@ import { type EquipmentCell, DOC_VERSION, type LayerCells, type PageDoc, type Pr
 import { sanitizeConnections } from "./connection";
 import { sanitizeDevices } from "./device";
 import { type LayerDef, sanitizeLayers } from "./layers";
+import { sanitizeOpacity } from "./palette";
 import { ensurePalette } from "./paletteOps";
 import { type PagePaper, sanitizePaper } from "./paper";
+import { DEFAULT_LINE_STYLE, type LineStyle, sanitizeLineStyle } from "./pattern";
 import { sanitizePhotos } from "./photo";
 import { sanitizeZones } from "./zone";
 
@@ -31,7 +33,7 @@ export const LEGACY_STORAGE_KEY = "rfid-grid-editor:doc:v1";
  * 자리이기도 하다. 문서를 여는 길은 모두 이 함수를 지나므로, 위쪽 코드는
  * `photos` 하나만 보면 된다.
  */
-function sanitizeEquipment(raw: unknown): Record<string, EquipmentCell> {
+function sanitizeEquipment(raw: unknown, inherited: KindStyles = new Map()): Record<string, EquipmentCell> {
   if (!raw || typeof raw !== "object") return {};
   const out: Record<string, EquipmentCell> = {};
 
@@ -43,9 +45,43 @@ function sanitizeEquipment(raw: unknown): Record<string, EquipmentCell> {
     if (photos.length > 0) cell.photos = photos;
     else delete cell.photos;
     if (typeof cell.deviceId !== "string" || !cell.deviceId) delete cell.deviceId;
+
+    // 선 모양 · 진하기는 아는 값만, 기본값(실선 · 불투명)은 필드 없이.
+    const legacy = cell.kind ? inherited.get(cell.kind) : undefined;
+    const lineStyle = sanitizeLineStyle(cell.lineStyle) ?? legacy?.lineStyle;
+    if (lineStyle && lineStyle !== DEFAULT_LINE_STYLE) cell.lineStyle = lineStyle;
+    else delete cell.lineStyle;
+    const opacity = sanitizeOpacity(cell.opacity) ?? legacy?.opacity ?? null;
+    if (opacity !== null && opacity < 1) cell.opacity = opacity;
+    else delete cell.opacity;
     out[key] = cell;
   }
 
+  return out;
+}
+
+type KindStyles = Map<string, { lineStyle?: LineStyle; opacity?: number }>;
+
+/**
+ * 예전 판은 장비 항목(팔레트)에 선 모양·진하기를 두어 그 장비를 놓은 모든 칸에
+ * 한 번에 먹였다. 지금은 칸마다 정한다(`EquipmentCell.lineStyle` · `opacity`) —
+ * 팔레트에서는 읽지 않으므로, 파일에 남은 옛 값을 여기서 칸으로 내려보낸다.
+ * 그래야 문서를 열었을 때 어제와 같은 모양으로 보인다.
+ */
+function legacyKindStyles(rawPalette: unknown): KindStyles {
+  const out: KindStyles = new Map();
+  if (!Array.isArray(rawPalette)) return out;
+  for (const entry of rawPalette) {
+    if (!entry || typeof entry !== "object") continue;
+    const item = entry as { id?: unknown; role?: unknown; lineStyle?: unknown; opacity?: unknown };
+    if (item.role !== "kind" || typeof item.id !== "string") continue;
+    const lineStyle = sanitizeLineStyle(item.lineStyle);
+    const opacity = sanitizeOpacity(item.opacity);
+    const style: { lineStyle?: LineStyle; opacity?: number } = {};
+    if (lineStyle && lineStyle !== DEFAULT_LINE_STYLE) style.lineStyle = lineStyle;
+    if (opacity !== null && opacity < 1) style.opacity = opacity;
+    if (style.lineStyle || style.opacity !== undefined) out.set(item.id, style);
+  }
   return out;
 }
 
@@ -80,6 +116,8 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
   // 레이어 목록이 없는 이전 문서는 기본 3종을 받는다.
   const layers = sanitizeLayers(raw.layers);
 
+  const kindStyles = legacyKindStyles(raw.palette);
+
   // 다중 페이지 형식인가? (pages 배열 존재)
   if (Array.isArray(raw.pages) && raw.pages.length > 0) {
     const pages: PageDoc[] = raw.pages.map((p, idx) => {
@@ -93,7 +131,7 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
         cols,
         rows,
         background: (rawPage.background ?? {}) as PageDoc["background"],
-        equipment: sanitizeEquipment(rawPage.equipment),
+        equipment: sanitizeEquipment(rawPage.equipment, kindStyles),
         wiring: (rawPage.wiring ?? {}) as PageDoc["wiring"],
         ...(sanitizeLayerCells(rawPage.layerCells, layers)
           ? { layerCells: sanitizeLayerCells(rawPage.layerCells, layers) as LayerCells }
@@ -132,7 +170,7 @@ export function sanitizeProject(input: unknown): ProjectDoc | null {
       cols: typeof raw.cols === "number" ? Math.max(10, Math.min(200, raw.cols)) : 48,
       rows: typeof raw.rows === "number" ? Math.max(10, Math.min(200, raw.rows)) : 30,
       background: (raw.background ?? {}) as PageDoc["background"],
-      equipment: sanitizeEquipment(raw.equipment),
+      equipment: sanitizeEquipment(raw.equipment, kindStyles),
       wiring: (raw.wiring ?? {}) as PageDoc["wiring"],
     };
 

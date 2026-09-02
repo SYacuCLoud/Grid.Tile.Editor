@@ -8,8 +8,10 @@ import {
   type StatusId,
   type TileId,
   type WireId,
+  sanitizeOpacity,
 } from "./palette";
 import type { PagePaper } from "./paper";
+import { DEFAULT_LINE_STYLE, type LineStyle } from "./pattern";
 import { type Connection, type ConnectionSegment, connectionSegmentsOnPage } from "./connection";
 import type { Device } from "./device";
 import type { Zone } from "./zone";
@@ -33,6 +35,16 @@ export interface EquipmentCell {
    */
   deviceId?: string;
   /**
+   * 이 칸 장비 테두리의 선 모양. 없으면 실선. 팔레트 항목이 아니라 칸이 정한다 —
+   * 같은 장비라도 칸마다 "계획(파선)" 과 "설치(실선)" 를 달리 그릴 수 있다.
+   */
+  lineStyle?: LineStyle;
+  /**
+   * 이 칸 장비(테두리 · 이름 글자)의 진하기(0 초과 ~ 1). 없으면 불투명.
+   * 옅게 두면 아직 확정되지 않은 자리가 눈에 덜 걸린다.
+   */
+  opacity?: number;
+  /**
    * 칸에 걸어 둔 사진들(data URL). 현장 사진을 그 자리에 붙여 두면 도면이 대장이 된다.
    * 문서에 함께 담기므로 붙일 때 작게 줄이고 장수·용량을 제한한다(`photo.ts`).
    */
@@ -43,6 +55,19 @@ export interface EquipmentCell {
    * @deprecated `photos` 를 쓴다.
    */
   photo?: string;
+}
+
+/** 이 칸 장비를 그릴 진하기. 정하지 않았으면 불투명. */
+export function cellOpacity(cell: Pick<EquipmentCell, "opacity"> | undefined): number {
+  return cell?.opacity ?? 1;
+}
+
+/** 칸 장비의 선 모양·진하기 중 기본값(실선 · 불투명)은 필드를 두지 않는다 — 예전 문서와 모양이 같다. */
+export function normalizeCellStyle(cell: EquipmentCell): void {
+  if (!cell.lineStyle || cell.lineStyle === DEFAULT_LINE_STYLE) delete cell.lineStyle;
+  const opacity = sanitizeOpacity(cell.opacity);
+  if (opacity === null || opacity >= 1) delete cell.opacity;
+  else cell.opacity = opacity;
 }
 
 /** 칸의 사진 목록. 이전 판 문서(단일 `photo`)도 여기서 한 장짜리 목록으로 보인다. */
@@ -476,7 +501,10 @@ export function eraseCells(doc: LayoutDoc, layer: LayerId, points: Point[]): Lay
 }
 
 /** 칸 정보 편집 상자가 넘기는 값. `photo` 는 이전 판 호출부 호환용이다. */
-export type EquipmentInfoPatch = Pick<EquipmentCell, "label" | "memo" | "photos" | "photo" | "deviceId">;
+export type EquipmentInfoPatch = Pick<
+  EquipmentCell,
+  "label" | "memo" | "photos" | "photo" | "deviceId" | "lineStyle" | "opacity"
+>;
 
 export function updateEquipmentInfoOnPage(
   page: PageDoc,
@@ -487,6 +515,7 @@ export function updateEquipmentInfoOnPage(
   if (!merged.label) delete merged.label;
   if (!merged.memo) delete merged.memo;
   if (!merged.deviceId) delete merged.deviceId;
+  normalizeCellStyle(merged);
 
   // 사진은 목록 하나로 모은다. 이전 판 단일 필드는 여기서 사라진다.
   // patch 에 사진 자리가 없으면 원래 칸의 사진을 그대로 둔다.

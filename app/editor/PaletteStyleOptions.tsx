@@ -124,6 +124,8 @@ interface OpacityPickerProps {
   onPick: (opacity: number) => void;
   /** 이 분류의 기본값. 눈금에 표시해 되돌릴 자리를 알려 준다. */
   fallback: number;
+  /** 보일 눈금. 생략하면 전부(`OPACITY_STEPS`). */
+  steps?: readonly number[];
 }
 
 /**
@@ -132,14 +134,14 @@ interface OpacityPickerProps {
  * 배선은 도면 위를 가로질러 지나가므로 기본이 반투명이다 — 진하게 깔면 그 아래
  * 배경·설비가 가려진다.
  */
-export function OpacityPicker({ color, value, onPick, fallback }: OpacityPickerProps) {
+export function OpacityPicker({ color, value, onPick, fallback, steps = OPACITY_STEPS }: OpacityPickerProps) {
   return (
     <div className="mt-1.5">
       <p className={LABEL}>
         진하기 <span className="font-normal text-slate-400">(아래 도면이 비쳐 보인다)</span>
       </p>
       <div className="mt-0.5 flex flex-wrap gap-1">
-        {OPACITY_STEPS.map((step) => (
+        {steps.map((step) => (
           <button
             key={step}
             type="button"

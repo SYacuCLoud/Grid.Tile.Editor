@@ -110,8 +110,25 @@ export function CellNotePopover(props: CellNotePopoverProps) {
   };
 
   // 연결된 칸은 글자(label)를 넘기지 않는다 — 대장이 맡은 값을 덮지 않는다.
-  const save = () =>
-    props.onSave(props.deviceText ? { memo, photos } : { label, memo, photos });
+  const save = () => props.onSave(props.deviceText ? { memo, photos } : { label, memo, photos });
+
+  /**
+   * 상자 안 어디에 포커스가 있어도 Enter 는 저장이다.
+   *
+   * 식별자·메모 입력은 제 손으로 Enter 를 처리하고(메모는 Shift+Enter 줄바꿈),
+   * 선택 상자와 진짜 단추(저장 · 닫기 · 사진 …)는 Enter 가 제 일을 해야 한다.
+   * 그 밖 — 토글 칩(`aria-pressed`)이나 상자의 빈 자리 — 에서 Enter 를 치면
+   * 저장한다. 포커스가 입력 밖에 있다고 Enter 가 죽으면 "저장이 안 된다" 로 보인다.
+   */
+  const onEnterAnywhere = (event: React.KeyboardEvent) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    const target = event.target as HTMLElement;
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (tag === "BUTTON" && !target.hasAttribute("aria-pressed")) return;
+    event.preventDefault();
+    save();
+  };
 
   /**
    * 고른 그림들을 줄여 목록에 더한다(긴 변 480px, JPEG).
@@ -183,11 +200,17 @@ export function CellNotePopover(props: CellNotePopoverProps) {
   };
 
   return (
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- 상자 어디서나 Enter 로 저장하는 단축키다. 안의 입력·단추는 제 접근성을 그대로 갖는다.
     <div
-      className="absolute z-30 border border-slate-400 bg-white p-2 shadow-lg"
+      className="absolute z-30 border border-slate-400 bg-white p-2 shadow-lg outline-none"
       style={style}
+      role="dialog"
+      aria-label="칸 정보"
+      // 빈 자리를 눌러도 상자가 포커스를 받아 Enter 저장이 통한다.
+      tabIndex={-1}
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
+      onKeyDown={onEnterAnywhere}
     >
       <p className="mb-1 text-[11px] font-semibold text-slate-700">칸 정보</p>
       <p className="mb-1.5 text-[11px] text-slate-500">{props.caption}</p>

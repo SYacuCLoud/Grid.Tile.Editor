@@ -41,6 +41,11 @@ export interface ClipboardData {
   width: number;
   height: number;
   cells: ClipboardCell[];
+  /**
+   * 잘라낸 자리. 있으면 첫 붙여넣기가 "옮기기" 다 — 그 범위를 가리키던 연결의
+   * 칸 끝점도 함께 옮긴다(`moveCellEndpoints`). 복사하거나 한 번 붙인 뒤에는 없다.
+   */
+  cutFrom?: { pageId: string; range: CellRange };
 }
 
 /** 두 점을 정규화하여 셀 범위(CellRange)를 만든다. 문서가 주어지면 격자 경계 내로 클램핑한다. */
@@ -180,7 +185,15 @@ function normalizeLayerCells(layerCells: LayerCells): { layerCells?: LayerCells 
 
 function sameEquipment(a: EquipmentCell | undefined, b: EquipmentCell | undefined): boolean {
   if (!a || !b) return !a && !b;
-  return a.status === b.status && a.kind === b.kind && a.label === b.label && a.memo === b.memo;
+  return (
+    a.status === b.status &&
+    a.kind === b.kind &&
+    a.label === b.label &&
+    a.memo === b.memo &&
+    a.deviceId === b.deviceId &&
+    a.lineStyle === b.lineStyle &&
+    a.opacity === b.opacity
+  );
 }
 
 /**

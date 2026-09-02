@@ -6,12 +6,13 @@ import {
   connectionsOfDevice,
   findConnection,
   MAX_CONNECTION_LABEL,
+  moveCellEndpoints,
   nextConnectionId,
   removeConnectionFromProject,
   sanitizeConnections,
 } from "../app/editor/connection.ts";
 import { linkDeviceToCell, removeDeviceFromProject, upsertDeviceInProject } from "../app/editor/device.ts";
-import { activeLayoutDoc, createProject, paintCellsOnPage, updateActivePage } from "../app/editor/doc.ts";
+import { activeLayoutDoc, addPageToProject, createProject, paintCellsOnPage, updateActivePage } from "../app/editor/doc.ts";
 import { CONNECTION_COLOR, connectionSegmentsOnPage } from "../app/editor/connection.ts";
 import { connectionEndColors } from "../app/editor/render.ts";
 import { inkOnPaper } from "../app/editor/palette.ts";
@@ -231,4 +232,78 @@ test("sanitizeProject: 대장에서 사라진 장치를 가리키는 연결은 �
   raw.devices = raw.devices.filter((d) => d.id !== "dev-2");
   const restored = sanitizeProject(raw);
   assert.equal(restored.connections, undefined);
+});
+
+test("moveCellEndpoints: 잘라낸 범위 안의 칸 끝점만 붙인 자리로 옮기고, 장치 끝점·범위 밖은 그대로", () => {
+  let project = projectWithDevices();
+  const page = project.activePageId;
+  // 칸(1,1)→칸(2,2) · 장치→칸(1,2) · 범위 밖 칸(8,8)→칸(9,9)
+  project = addConnectionToProject(project, { page, cell: "1,1" }, { page, cell: "2,2" }, { label: "둘 다 옮김" });
+  project = addConnectionToProject(project, { device: "dev-1" }, { page, cell: "1,2" });
+  project = addConnectionToProject(project, { page, cell: "8,8" }, { page, cell: "9,9" });
+
+  const moved = moveCellEndpoints(project, {
+    from: { pageId: page, minX: 1, minY: 1, maxX: 2, maxY: 2 },
+    to: { pageId: page, origin: { x: 10, y: 5 } },
+  });
+  assert.deepEqual(
+    moved.connections.map((c) => [c.from, c.to]),
+    [
+      [{ page, cell: "10,5" }, { page, cell: "11,6" }],
+      [{ device: "dev-1" }, { page, cell: "10,6" }],
+      [{ page, cell: "8,8" }, { page, cell: "9,9" }],
+    ],
+  );
+  assert.equal(moved.connections[0].label, "둘 다 옮김", "라벨 · id 는 그대로다");
+  assert.equal(moved.connections[0].id, project.connections[0].id);
+
+  // 범위가 아무 끝점도 안 품으면 같은 객체다(빈 이력 방지).
+  assert.equal(
+    moveCellEndpoints(project, {
+      from: { pageId: page, minX: 20, minY: 20, maxX: 21, maxY: 21 },
+      to: { pageId: page, origin: { x: 0, y: 0 } },
+    }),
+    project,
+  );
+});
+
+test("moveCellEndpoints: 다른 페이지로 붙이면 끝점의 페이지도 바뀌고, 격자 밖으로 잘린 끝점은 그대로", () => {
+  let project = projectWithDevices();
+  const page = project.activePageId;
+  project = addPageToProject(project, "둘째");
+  const other = project.pages[1].id;
+  project = addConnectionToProject(project, { page, cell: "0,0" }, { page, cell: "1,0" });
+
+  const lastCol = project.pages[1].cols - 1;
+  const moved = moveCellEndpoints(project, {
+    from: { pageId: page, minX: 0, minY: 0, maxX: 1, maxY: 0 },
+    to: { pageId: other, origin: { x: lastCol, y: 3 } },
+  });
+  // (0,0) 은 마지막 열에 들어가고, (1,0) 은 격자 밖으로 잘려 옛 자리에 남는다.
+  assert.deepEqual(moved.connections[0].from, { page: other, cell: `${lastCol},3` });
+  assert.deepEqual(moved.connections[0].to, { page, cell: "1,0" });
+});
+
+test("moveCellEndpoints: 옮긴 뒤 양끝이 같아진 연결은 버리고, 같은 쌍이 되면 옮겨 온 쪽이 남는다", () => {
+  let project = projectWithDevices();
+  const page = project.activePageId;
+  // 장치→칸(3,3) 이 있는 자리 위로 장치→칸(1,1) 을 옮긴다 → 쌍이 겹친다.
+  project = addConnectionToProject(project, { device: "dev-1" }, { page, cell: "3,3" }, { label: "옛것" });
+  project = addConnectionToProject(project, { device: "dev-1" }, { page, cell: "1,1" }, { label: "옮겨 옴" });
+  // 칸(1,1)→칸(5,5): (1,1) 이 (5,5) 위로 가면 양끝이 같아진다.
+  project = addConnectionToProject(project, { page, cell: "1,1" }, { page, cell: "5,5" });
+
+  const onto33 = moveCellEndpoints(project, {
+    from: { pageId: page, minX: 1, minY: 1, maxX: 1, maxY: 1 },
+    to: { pageId: page, origin: { x: 3, y: 3 } },
+  });
+  assert.deepEqual(onto33.connections.map((c) => c.label), ["옮겨 옴", undefined]);
+  assert.deepEqual(onto33.connections[0].to, { page, cell: "3,3" });
+
+  const onto55 = moveCellEndpoints(project, {
+    from: { pageId: page, minX: 1, minY: 1, maxX: 1, maxY: 1 },
+    to: { pageId: page, origin: { x: 5, y: 5 } },
+  });
+  assert.equal(onto55.connections.length, 2, "양끝이 같아진 연결은 사라진다");
+  assert.ok(onto55.connections.every((c) => !("cell" in c.from && "cell" in c.to && c.from.cell === c.to.cell)));
 });

@@ -9,7 +9,6 @@ import {
   defaultPaper,
   MAX_CELL_MM,
   MAX_MARGIN_MM,
-  type MemoPrintMode,
   MIN_CELL_MM,
   type PagePaper,
   type PaperId,
@@ -41,7 +40,10 @@ function clamp(value: number, min: number, max: number, fallback: number): numbe
   return Math.min(max, Math.max(min, value));
 }
 
-/** 활성 페이지의 인쇄 용지 설정. 격자와 PNG 는 건드리지 않고 화면 경계선만 정한다. */
+/**
+ * 활성 페이지의 인쇄 용지 규격 — 용지 · 방향 · 한 칸 mm · 여백과 장수 안내.
+ * 경계선 켜기/끄기와 메모 옵션은 `PrintOptions`(PNG 저장 단추 옆)가 맡는다.
+ */
 export function PaperForm(props: PaperFormProps) {
   const { paper, cols, rows } = props;
 
@@ -51,7 +53,7 @@ export function PaperForm(props: PaperFormProps) {
         <button type="button" className={`${FIELD} h-8 hover:bg-slate-100`} onClick={() => props.onChange(defaultPaper())}>
           인쇄 경계선 켜기
         </button>
-        <p className="mt-1 text-[11px] text-slate-500">인쇄될 장 경계를 점선으로 보여 줍니다.</p>
+        <p className="mt-1 text-[11px] text-slate-500">인쇄될 장 경계를 점선으로 보여 줍니다. 켜면 용지 규격을 고를 수 있습니다.</p>
       </>
     );
   }
@@ -151,36 +153,10 @@ export function PaperForm(props: PaperFormProps) {
         PNG 저장: 이 규격 {DEFAULT_PRINT_DPI}dpi{count.total > 1 ? ` · 파일 ${count.total}개` : ""}
       </p>
 
-      <label className="mt-2 flex items-center gap-1.5 text-[12px] text-slate-700">
-        <input
-          type="checkbox"
-          checked={memoMode !== "off"}
-          onChange={(event) => update({ memoMode: event.target.checked ? "inline" : "off" })}
-        />
-        메모 본문 인쇄
-        <span className="text-[11px] text-slate-400">
-          ({props.memoCount}건)
-        </span>
-      </label>
-
-      {/* 켤 때만 자리를 고른다. 껐으면 고를 것이 없다. */}
-      {memoMode !== "off" ? (
-        <label className={`mt-1 block ${LABEL}`}>
-          메모 자리
-          <select
-            className={FIELD}
-            value={memoMode}
-            onChange={(event) => update({ memoMode: event.target.value as MemoPrintMode })}
-          >
-            <option value="inline">빈 곳에 채움 (넘치면 다음 장)</option>
-            <option value="appendix">별지로 모음</option>
-          </select>
-        </label>
-      ) : null}
-
+      {/* 메모 본문을 실을지 · 어디에 실을지는 PNG 저장 단추 옆에서 고른다. 여기서는 결과만 보인다. */}
       <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
         {memoMode === "off"
-          ? "도면 칸에는 메모 번호가 찍힙니다. 본문은 실리지 않습니다."
+          ? "메모 본문 인쇄 꺼짐 — 도면 칸에는 메모 번호만 찍힙니다."
           : memoPages.length === 0
             ? "실을 메모가 없습니다."
             : `메모 ${props.memoCount}건 · ${
@@ -193,14 +169,6 @@ export function PaperForm(props: PaperFormProps) {
                   : `별지 ${memoPages.length}장`
               }`}
       </p>
-
-      <button
-        type="button"
-        className="mt-2 h-7 w-full border border-slate-300 bg-white text-[12px] text-slate-700 hover:bg-slate-100"
-        onClick={() => props.onChange(null)}
-      >
-        인쇄 경계선 끄기
-      </button>
     </>
   );
 }

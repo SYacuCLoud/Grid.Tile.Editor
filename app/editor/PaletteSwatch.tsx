@@ -41,14 +41,14 @@ export function PaletteSwatch({ item, size = 20 }: PaletteSwatchProps) {
     );
   }
 
+  // 장비 견본은 실선 · 불투명이다. 선 모양 · 진하기는 칸마다 정하므로 항목 견본에는 없다.
   const style =
     item.role === "kind"
       ? {
           width: size,
           height: size,
           background: "#ffffff",
-          opacity: alpha,
-          border: `2px ${borderStyleCss(item.lineStyle)} ${color}`,
+          border: `2px solid ${color}`,
         }
       : {
           width: size,
