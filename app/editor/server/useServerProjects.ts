@@ -187,7 +187,9 @@ export function useServerProjects(
         setStatus(
           result.copied
             ? `사본으로 저장: ${result.id} (r${result.revision})`
-            : `저장 완료 r${result.revision} · ${formatStamp(result.savedAt)}`,
+            : result.unchanged
+              ? `바뀐 내용이 없어 r${result.revision} 그대로입니다`
+              : `저장 완료 r${result.revision} · ${formatStamp(result.savedAt)}`,
         );
         await refresh();
       } catch (error) {

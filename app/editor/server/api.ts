@@ -45,6 +45,8 @@ export interface SaveSuccess {
   savedAt: string;
   author: string;
   copied: boolean;
+  /** 마지막 판과 같은 내용이어서 서버가 새 판을 만들지 않았다. 리비전은 그대로다. */
+  unchanged?: boolean;
 }
 
 export interface SaveConflict {

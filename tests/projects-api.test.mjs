@@ -347,8 +347,9 @@ test("API: 충돌은 409 로 알리고 내용을 함께 준다", async () => {
     const id = created.res.json.id;
     const loaded = await call(api, "GET", `/api/projects/${encodeURIComponent(id)}`);
 
+    // 같은 내용은 새 판이 되지 않으므로 먼저 저장하는 쪽은 내용을 바꿔 r2 를 만든다.
     await call(api, "POST", `/api/projects/${encodeURIComponent(id)}`, {
-      project: loaded.res.json.project,
+      project: { ...loaded.res.json.project, title: "충돌 · 너" },
       baseRevision: 1,
       author: "너",
     });
