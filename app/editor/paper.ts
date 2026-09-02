@@ -110,7 +110,7 @@ export function sheetCount(
   legendCount = 0,
 ): { across: number; down: number; total: number } {
   const per = sheetCells(paper);
-  const totalRows = rows + legendBandCells(paper, legendCount, cols);
+  const totalRows = rows + legendBand(paper, legendCount, cols, rows).bandCells;
   const across = Math.max(1, Math.ceil(cols / per.cols));
   const down = Math.max(1, Math.ceil(totalRows / per.rows));
   return { across, down, total: across * down };
@@ -178,4 +178,67 @@ export function legendBandCells(paper: PagePaper, legendCount: number, gridCols?
   const cellMm = Math.min(MAX_CELL_MM, Math.max(MIN_CELL_MM, paper.cellMm));
   const rows = Math.ceil(legendCount / legendColumns(paper, gridCols));
   return Math.ceil((LEGEND_GAP_MM + rows * LEGEND_ROW_MM) / cellMm);
+}
+
+/**
+ * 띠를 줄이는 단계. 앞에서부터 시도해 마지막 장 남은 행에 들어가는 첫 단계를 쓴다.
+ *
+ * 항목 폭을 먼저 줄인다(열이 늘어 줄이 준다) — 글자 크기는 그대로고 이름 뒤가
+ * 조금 더 접힐 뿐이다. 줄 높이는 그 다음이다 — 견본이 작아져 눈에 띈다.
+ */
+const LEGEND_FIT_STEPS: ReadonlyArray<{ entryMm: number; rowMm: number }> = [
+  { entryMm: LEGEND_ENTRY_MM, rowMm: LEGEND_ROW_MM },
+  { entryMm: 38, rowMm: LEGEND_ROW_MM },
+  { entryMm: 32, rowMm: LEGEND_ROW_MM },
+  { entryMm: LEGEND_ENTRY_MM, rowMm: 5 },
+  { entryMm: 38, rowMm: 5 },
+  { entryMm: 32, rowMm: 5 },
+];
+
+export interface LegendBand {
+  /** 띠가 차지하는 격자 행 수. 항목이 없으면 0. */
+  bandCells: number;
+  /** 한 줄에 늘어놓는 항목 수. */
+  columns: number;
+  /** 원래 크기(45mm · 6mm)보다 줄여서 맞췄는가. 용지 설정 안내에 적는다. */
+  compressed: boolean;
+}
+
+/**
+ * 인쇄물에 실리는 범례 띠 — 마지막 장에 **남은 행에 맞춰** 크기를 정한다.
+ *
+ * 띠는 격자 아래에 붙는데, 격자가 장을 거의 다 채우면 띠 몇 줄이 다음 장으로
+ * 넘어가 장이 하나 더 생긴다. 그 장에는 띠 조각만 실린다. 그래서 띠가 남은 행에
+ * 안 들어갈 때만 항목 폭 · 줄 높이를 단계적으로 줄여 본다(`LEGEND_FIT_STEPS`).
+ * 여유가 있는 도면은 원래 크기 그대로다. 아무 단계도 안 들어가면 원래 크기로 두고
+ * 다음 장으로 넘긴다 — 어차피 장이 늘어나는데 읽기까지 어려워질 이유가 없다.
+ *
+ * 화면 미리보기 · PNG · 장수 계산 · 용지 설정 안내가 모두 이 값을 써야 한다.
+ */
+export function legendBand(paper: PagePaper, legendCount: number, gridCols: number, gridRows: number): LegendBand {
+  if (legendCount <= 0) return { bandCells: 0, columns: legendColumns(paper, gridCols), compressed: false };
+
+  const { widthMm } = paperSizeMm(paper);
+  const marginMm = Math.min(MAX_MARGIN_MM, Math.max(0, paper.marginMm));
+  const cellMm = Math.min(MAX_CELL_MM, Math.max(MIN_CELL_MM, paper.cellMm));
+  const bandWidthMm = gridCols > 0 ? gridCols * cellMm : widthMm - marginMm * 2;
+
+  const fit = (step: { entryMm: number; rowMm: number }) => {
+    const columns = Math.max(1, Math.floor(bandWidthMm / step.entryMm));
+    const rows = Math.ceil(legendCount / columns);
+    return { columns, bandCells: Math.ceil((LEGEND_GAP_MM + rows * step.rowMm) / cellMm) };
+  };
+
+  const natural = { ...fit(LEGEND_FIT_STEPS[0]), compressed: false };
+
+  // 격자만 놓았을 때 마지막 장에 남는 행. 장을 꽉 채웠으면 0 이다.
+  const sheetRows = sheetCells(paper).rows;
+  const freeRows = Math.ceil(Math.max(1, gridRows) / sheetRows) * sheetRows - gridRows;
+  if (natural.bandCells <= freeRows) return natural;
+
+  for (const step of LEGEND_FIT_STEPS.slice(1)) {
+    const candidate = fit(step);
+    if (candidate.bandCells <= freeRows) return { ...candidate, compressed: true };
+  }
+  return natural;
 }

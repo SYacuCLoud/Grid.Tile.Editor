@@ -15,7 +15,7 @@ import {
   type PaperId,
   PAPERS,
   paperSizeMm,
-  legendBandCells,
+  legendBand,
   sheetCells,
   sheetCount,
 } from "./paper";
@@ -58,7 +58,8 @@ export function PaperForm(props: PaperFormProps) {
 
   const per = sheetCells(paper);
   const count = sheetCount(paper, cols, rows, props.legendCount);
-  const band = legendBandCells(paper, props.legendCount, cols);
+  const legendFit = legendBand(paper, props.legendCount, cols, rows);
+  const band = legendFit.bandCells;
   const size = paperSizeMm(paper);
   const memoMode = paper.memoMode ?? DEFAULT_MEMO_MODE;
 
@@ -140,7 +141,7 @@ export function PaperForm(props: PaperFormProps) {
       <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
         {size.widthMm} × {size.heightMm}mm · 한 장에 {per.cols} × {per.rows}칸
         <br />
-        {cols} × {rows} + 범례 {band}행 →{" "}
+        {cols} × {rows} + 범례 {band}행{legendFit.compressed ? " (줄여 맞춤)" : ""} →{" "}
         <span className="font-semibold text-slate-900">
           {count.across} × {count.down} = {count.total}장
         </span>

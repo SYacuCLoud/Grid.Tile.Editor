@@ -3,6 +3,7 @@ import test from "node:test";
 import { createProject } from "../app/editor/doc.ts";
 import {
   defaultPaper,
+  legendBand,
   legendBandCells,
   legendColumns,
   paperSizeMm,
@@ -138,6 +139,29 @@ test("범례 띠: 인쇄 치수로 잡아 화면 배율과 무관하다", () => 
 
   // 한 칸을 크게 잡으면 같은 범례가 더 적은 행을 차지한다.
   assert.equal(legendBandCells({ ...a4, cellMm: 10 }, 6), 1);
+});
+
+test("범례 띠: 마지막 장 남은 행에 안 들어가면 항목 폭·줄 높이를 줄여 한 장에 맞춘다", () => {
+  // 가로 A4, 칸 5mm, 여백 10mm → 한 장 55x38칸. 격자 40칸(200mm) 범례 13개.
+  const a4 = { ...defaultPaper("a4"), orientation: "landscape", cellMm: 5, marginMm: 10 };
+
+  // 여유가 있으면(격자 30행 → 8행 남음) 원래 크기: 4열 · 4줄 → (4 + 24) / 5 → 6행.
+  const roomy = legendBand(a4, 13, 40, 30);
+  assert.deepEqual(roomy, { bandCells: 6, columns: 4, compressed: false });
+  assert.equal(sheetCount(a4, 40, 30, 13).down, 1);
+
+  // 5행만 남으면(격자 33행) 원래 6행은 넘친다 → 항목 폭 38mm 로 5열 · 3줄 → (4 + 18) / 5 → 5행에 맞춘다.
+  const tight = legendBand(a4, 13, 40, 33);
+  assert.deepEqual(tight, { bandCells: 5, columns: 5, compressed: true });
+  assert.equal(sheetCount(a4, 40, 33, 13).down, 1, "줄여서 한 장에 들어가야 한다");
+
+  // 2행만 남으면(격자 36행) 어떤 단계로도 안 들어간다 → 원래 크기로 두고 다음 장으로 넘긴다.
+  const hopeless = legendBand(a4, 13, 40, 36);
+  assert.deepEqual(hopeless, { bandCells: 6, columns: 4, compressed: false });
+  assert.equal(sheetCount(a4, 40, 36, 13).down, 2);
+
+  // 항목이 없으면 띠가 없다.
+  assert.equal(legendBand(a4, 0, 40, 33).bandCells, 0);
 });
 
 test("범례 띠: 격자 너비만큼만 차지한다 (오른쪽 빈 자리는 메모 몫)", () => {

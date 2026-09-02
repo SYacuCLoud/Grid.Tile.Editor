@@ -7,7 +7,7 @@ import { connectionEndText, connectionTextFor } from "./connectionText";
 import { ConnectionOverlay } from "./ConnectionOverlay";
 import { deviceById, deviceLabel } from "./device";
 import { DevicePanel } from "./DevicePanel";
-import { legendBandCells, legendColumns, sheetCells } from "./paper";
+import { legendBand, sheetCells } from "./paper";
 import { cellKey, cellPhotos, parseCellKey } from "./doc";
 import { GridCanvas } from "./GridCanvas";
 import { InspectorPanel } from "./InspectorPanel";
@@ -412,12 +412,10 @@ export function GridEditor() {
   const printLegend = useMemo(() => {
     const paper = state.activePageDoc.paper;
     if (!paper || legend.length === 0) return null;
-    return {
-      items: legend,
-      bandCells: legendBandCells(paper, legend.length, state.doc.cols),
-      columns: legendColumns(paper, state.doc.cols),
-    };
-  }, [legend, state.activePageDoc.paper, state.doc.cols]);
+    // 마지막 장 남은 행에 안 들어가면 띠를 줄여 맞춘다 — 인쇄 · 장수 계산과 같은 셈이다.
+    const band = legendBand(paper, legend.length, state.doc.cols, state.doc.rows);
+    return { items: legend, bandCells: band.bandCells, columns: band.columns };
+  }, [legend, state.activePageDoc.paper, state.doc.cols, state.doc.rows]);
 
   /**
    * 인쇄물에 실릴 메모 본문의 자리. 경계선 안에 미리 그려 둔다.

@@ -15,8 +15,7 @@
 import type { LayoutDoc } from "./doc";
 import type { LayerId, PaletteItem } from "./palette";
 import {
-  legendBandCells,
-  legendColumns,
+  legendBand,
   MAX_CELL_MM,
   MAX_MARGIN_MM,
   MIN_CELL_MM,
@@ -85,6 +84,8 @@ export function planPrint(
   const cellMm = Math.min(MAX_CELL_MM, Math.max(MIN_CELL_MM, paper.cellMm));
   const marginMm = Math.min(MAX_MARGIN_MM, Math.max(0, paper.marginMm));
   const counts = sheetCount(paper, doc.cols, doc.rows, legendCount);
+  // 띠 크기는 장수 계산과 같은 셈이어야 한다 — 남은 행에 맞춰 줄였으면 여기서도 줄어 있다.
+  const band = legendBand(paper, legendCount, doc.cols, doc.rows);
 
   return {
     paper,
@@ -97,8 +98,8 @@ export function planPrint(
     across: counts.across,
     down: counts.down,
     total: counts.total,
-    bandCells: legendBandCells(paper, legendCount, doc.cols),
-    legendColumns: legendColumns(paper, doc.cols),
+    bandCells: band.bandCells,
+    legendColumns: band.columns,
   };
 }
 
