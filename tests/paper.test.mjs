@@ -140,6 +140,25 @@ test("범례 띠: 인쇄 치수로 잡아 화면 배율과 무관하다", () => 
   assert.equal(legendBandCells({ ...a4, cellMm: 10 }, 6), 1);
 });
 
+test("범례 띠: 격자 너비만큼만 차지한다 (오른쪽 빈 자리는 메모 몫)", () => {
+  const a4 = { ...defaultPaper("a4"), orientation: "landscape", cellMm: 5, marginMm: 10 };
+
+  // 격자 30칸 = 150mm → 45mm 항목 3칸씩. 6개면 두 줄: (4 + 12) / 5 = 3.2 → 4행.
+  assert.equal(legendColumns(a4, 30), 3);
+  assert.equal(legendBandCells(a4, 6, 30), 4);
+
+  // 격자가 한 장(55칸)을 다 쓰면 인쇄영역 너비와 같은 6칸씩이다.
+  assert.equal(legendColumns(a4, 55), 6);
+  assert.equal(legendBandCells(a4, 6, 55), 2);
+
+  // 격자가 한 장보다 넓으면 띠도 그만큼 길어져 열이 늘어난다: 110칸 = 550mm → 12칸씩.
+  assert.equal(legendColumns(a4, 110), 12);
+
+  // 장수 계산도 격자 너비 기준 띠를 쓴다 — 좁은 격자는 띠가 두꺼워져 한 장을 넘길 수 있다.
+  assert.equal(sheetCount(a4, 55, 36, 6).down, 1);
+  assert.equal(sheetCount(a4, 30, 36, 6).down, 2);
+});
+
 test("장수 계산: 범례 띠를 행 수에 더한다", () => {
   const a4 = { ...defaultPaper("a4"), orientation: "landscape", cellMm: 5, marginMm: 10 };
   // 한 장 = 55 x 38 칸, 범례 6개 -> 2행

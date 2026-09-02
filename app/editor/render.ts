@@ -12,6 +12,7 @@ import {
   textColorOn,
   type WireId,
 } from "./palette";
+import { MEMO_PAD_MM, memoColumnWidthMm } from "./memoPrint";
 import { legendItems, legendLabel } from "./paletteOps";
 import { dashArray, fillCellPattern } from "./pattern";
 import { type CellRange } from "./range";
@@ -59,7 +60,7 @@ export interface RenderOptions {
    * 한 칸이 `cellMm` 에 해당하므로 `(mm - 여백) / cellMm` 이 칸 수다.
    *
    * `originCells` 는 이 자리가 놓인 장의 좌상단 칸이다 — 도면이 여러 장에
-   * 걸치면 메모는 마지막 장에 실린다.
+   * 걸치면 빈 곳이 있는 장마다 하나씩 온다.
    */
   printMemo?: {
     pages: Array<{
@@ -909,7 +910,10 @@ function drawMemoPreview(
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
 
-    const columnW = width / Math.max(1, block.columns);
+    // 글자는 테두리에서 안쪽 여백만큼 떨어져 시작한다 — 인쇄(`renderMemoBlock`)와 같다.
+    const pad = spanPx(MEMO_PAD_MM);
+    const columnWidthMm = memoColumnWidthMm(block);
+    const columnW = spanPx(columnWidthMm);
     let column = 0;
     let used = 0;
 
@@ -918,7 +922,6 @@ function drawMemoPreview(
       const head = `${entry.no}. ${entry.label ? `${entry.label} · ` : ""}`;
       const text = `${head}${entry.memo}`;
       const perCharMm = textMm * 0.62;
-      const columnWidthMm = block.widthMm / Math.max(1, block.columns);
       const perLine = Math.max(8, Math.floor((columnWidthMm - 2) / perCharMm));
       const need =
         text.split(/\r?\n/).reduce((sum, p) => sum + Math.max(1, Math.ceil(p.length / perLine)), 0) + 1;
@@ -928,12 +931,12 @@ function drawMemoPreview(
         used = 0;
       }
 
-      const x = left + column * columnW;
-      let y = top + used * lineH;
+      const x = left + pad + column * columnW;
+      let y = top + pad + used * lineH;
 
       ctx.font = boldFontFor(size);
       ctx.fillStyle = MEMO_MARK_BG;
-      ctx.fillText(`${entry.no}.`, x + 1, y);
+      ctx.fillText(`${entry.no}.`, x, y);
       const headW = ctx.measureText(`${entry.no}. `).width;
 
       ctx.font = fontFor(size);
@@ -943,7 +946,7 @@ function drawMemoPreview(
       const body = `${entry.label ? `${entry.label} · ` : ""}${entry.memo}`;
       for (const paragraph of body.split(/\r?\n/)) {
         for (const line of wrapToWidth(ctx, paragraph, room)) {
-          ctx.fillText(line, x + 1 + headW, y);
+          ctx.fillText(line, x + headW, y);
           y += lineH;
         }
       }
@@ -1052,17 +1055,19 @@ function renderOverlays(
   }
 
   // 인쇄물에 함께 실릴 범례를 도면 아래에 미리 그려 둔다.
+  // 띠는 **격자 너비**만큼만 — 격자 오른쪽 빈 자리는 메모 몫이다(`legendColumns`).
   if (options.printLegend && options.printLegend.items.length > 0 && band > 0) {
     const { items, columns } = options.printLegend;
     const bandTop = doc.rows * cell;
     const bandHeight = band * cell;
-    const colWidth = (extent.cols * cell) / Math.max(1, columns);
+    const bandWidth = doc.cols * cell;
+    const colWidth = bandWidth / Math.max(1, columns);
     const rowHeight = bandHeight / Math.max(1, Math.ceil(items.length / Math.max(1, columns)));
     const box = Math.max(6, Math.min(rowHeight * 0.62, cell * 0.8));
 
     ctx.save();
     ctx.fillStyle = PAPER;
-    ctx.fillRect(0, bandTop, extent.cols * cell, bandHeight);
+    ctx.fillRect(0, bandTop, bandWidth, bandHeight);
 
     items.forEach((item, i) => {
       const x = (i % columns) * colWidth + 4;

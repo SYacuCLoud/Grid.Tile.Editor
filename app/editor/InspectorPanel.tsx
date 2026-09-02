@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import {
-  cellCount,
   type EquipmentCell,
   type LayoutDoc,
   MAX_COLS,
@@ -12,10 +11,8 @@ import {
   parseCellKey,
 } from "./doc";
 import { type Device, deviceById, deviceLabel } from "./device";
-import { indexPalette, type PaletteItem, resolveItem } from "./palette";
+import { indexPalette, resolveItem } from "./palette";
 import type { MemoEntry } from "./memoPrint";
-import { legendLabel } from "./paletteOps";
-import { PaletteSwatch } from "./PaletteSwatch";
 import type { PagePaper } from "./paper";
 import { PaperForm } from "./PaperForm";
 
@@ -29,8 +26,6 @@ interface InspectorPanelProps {
   doc: LayoutDoc;
   selectedKey: string | null;
   selectionRange: CellRange | null;
-  /** 프로젝트 전체 기준으로 고른 범례 항목. */
-  legend: PaletteItem[];
   hasClipboard: boolean;
   /** 프로젝트의 장치 대장. 칸을 골랐을 때 연결된 장치 한 줄을 보여 주는 데만 쓴다.
    *  등록·연결·수정은 칸 우클릭이 맡는다 — 손이 캔버스에 있을 때 끝난다. */
@@ -144,7 +139,6 @@ function SizeForm({
 export function InspectorPanel(props: InspectorPanelProps) {
   const { doc, selectedKey, selectionRange, hasClipboard } = props;
   const cell = selectedKey ? doc.equipment[selectedKey] : undefined;
-  const counts = cellCount(doc);
   const isMultiCellRange = selectionRange && (selectionRange.width > 1 || selectionRange.height > 1);
 
   return (
@@ -207,27 +201,6 @@ export function InspectorPanel(props: InspectorPanelProps) {
           memoCount={props.memos.length}
           onChange={props.onPaper}
         />
-      </section>
-
-      <section>
-        <h2 className="mb-2 text-[12px] font-semibold text-slate-900">범례</h2>
-        <ul className="grid grid-cols-2 gap-1">
-          {props.legend.map((item) => (
-            <li key={item.id} className="flex items-center gap-2 text-[12px] text-slate-700">
-              <PaletteSwatch item={item} size={16} />
-              <span className="truncate" title={legendLabel(item)}>
-                {legendLabel(item)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="text-[12px] text-slate-600">
-        <h2 className="mb-1 text-[12px] font-semibold text-slate-900">현황</h2>
-        <p>설비 칸 {counts.equipment}개</p>
-        <p>배선 칸 {counts.wiring}개</p>
-        <p>배경 칸 {counts.background}개</p>
       </section>
     </aside>
   );

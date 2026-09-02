@@ -30,8 +30,11 @@ import { renderDoc } from "./render";
 import {
   type MemoPage,
   MEMO_LINE_MM,
+  MEMO_PAD_MM,
   MEMO_TEXT_MM,
+  memoColumnWidthMm,
   memoLineCount,
+  type SheetGrid,
 } from "./memoPrint";
 import { type SheetMeta, watermarkText } from "./watermark";
 
@@ -94,8 +97,8 @@ export function planPrint(
     across: counts.across,
     down: counts.down,
     total: counts.total,
-    bandCells: legendBandCells(paper, legendCount),
-    legendColumns: legendColumns(paper),
+    bandCells: legendBandCells(paper, legendCount, doc.cols),
+    legendColumns: legendColumns(paper, doc.cols),
   };
 }
 
@@ -215,17 +218,20 @@ export function renderMemoBlock(
 
   const size = Math.max(7, Math.round(px(MEMO_TEXT_MM)));
   const lineH = px(MEMO_LINE_MM);
-  const columnWidthMm = block.widthMm / Math.max(1, block.columns);
+  const columnWidthMm = memoColumnWidthMm(block);
   const columnW = px(columnWidthMm);
+  // 글자는 자리 테두리에서 안쪽 여백만큼 떨어져 시작한다 — 화면 미리보기와 같다.
+  const pad = px(MEMO_PAD_MM);
+  const left = px(block.xMm) + pad;
 
-  let top = px(block.yMm);
+  let top = px(block.yMm) + pad;
 
   if (title) {
     ctx.fillStyle = MEMO_TITLE_COLOR;
     ctx.font = `600 ${Math.round(size * 1.15)}px "Segoe UI", "Malgun Gothic", system-ui, sans-serif`;
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    ctx.fillText(title, px(block.xMm), top);
+    ctx.fillText(title, left, top);
 
     // 제목 아래 가로줄. 도면과 메모를 눈으로 갈라 준다.
     const ruleY = top + lineH * 0.95;
@@ -233,8 +239,8 @@ export function renderMemoBlock(
     ctx.lineWidth = Math.max(1, px(0.2));
     ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.moveTo(px(block.xMm), ruleY);
-    ctx.lineTo(px(block.xMm + block.widthMm), ruleY);
+    ctx.moveTo(left, ruleY);
+    ctx.lineTo(px(block.xMm + block.widthMm) - pad, ruleY);
     ctx.stroke();
 
     top = ruleY + lineH * 0.5;
@@ -253,7 +259,7 @@ export function renderMemoBlock(
       used = 0;
     }
 
-    const x = px(block.xMm) + column * columnW;
+    const x = left + column * columnW;
     let y = top + used * lineH;
 
     // 번호는 짙게, 본문은 그보다 옅게 — 번호를 먼저 찾고 본문을 읽는다.
@@ -330,16 +336,13 @@ export function renderMemoSheet(
 }
 
 /**
- * 이 도면의 마지막 장에 실제로 실리는 격자 칸 수.
+ * 한 장에 실제로 실리는 격자 칸 수와 범례 띠 몫.
  *
- * 메모를 넣을 빈 곳을 재려면 필요하다 — 도면이 여러 장에 걸치면 마지막 장만
- * 남는 자리가 생긴다.
+ * 메모를 넣을 빈 곳을 재려면 필요하다. 오른쪽 끝 장은 격자가 다 채우지 못한 폭이,
+ * 아래 끝 장은 다 채우지 못한 높이가 남는다. 범례 띠가 다음 장으로 넘어가면 그
+ * 장은 격자 없이 띠 몇 줄만 싣는다.
  */
-export function lastSheetGrid(
-  doc: { cols: number; rows: number },
-  plan: PrintPlan,
-): { index: number; gridCols: number; gridRows: number; bandCells: number } {
-  const index = plan.total - 1;
+export function sheetGrid(doc: { cols: number; rows: number }, plan: PrintPlan, index: number): SheetGrid {
   const ax = index % plan.across;
   const ay = Math.floor(index / plan.across);
 
@@ -357,4 +360,14 @@ export function lastSheetGrid(
     gridRows: gridRowsHere,
     bandCells: bandHere,
   };
+}
+
+/** 모든 장의 격자 몫. 장 번호 순이다 — 메모는 이 순서로 빈 곳을 채운다. */
+export function sheetGrids(doc: { cols: number; rows: number }, plan: PrintPlan): SheetGrid[] {
+  return Array.from({ length: plan.total }, (_, index) => sheetGrid(doc, plan, index));
+}
+
+/** 마지막 장의 격자 몫. `sheetGrids` 의 끝 원소와 같다. */
+export function lastSheetGrid(doc: { cols: number; rows: number }, plan: PrintPlan): SheetGrid {
+  return sheetGrid(doc, plan, plan.total - 1);
 }

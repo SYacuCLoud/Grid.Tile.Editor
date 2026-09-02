@@ -25,7 +25,7 @@ import { collectMemos, MEMO_LINE_MM, MEMO_TEXT_MM, planMemoPages } from "./memoP
 import { DEFAULT_MEMO_MODE } from "./paper";
 import {
   DEFAULT_PRINT_DPI,
-  lastSheetGrid,
+  sheetGrids,
   planPrint,
   printSheetSuffix,
   renderMemoSheet,
@@ -235,15 +235,15 @@ export function GridEditor() {
       const plan = planPrint(state.doc, paper, legend.length, DEFAULT_PRINT_DPI);
       const memoMode = paper.memoMode ?? DEFAULT_MEMO_MODE;
 
-      // 메모 본문을 실을 자리를 미리 나눈다. `inline` 은 마지막 장의 빈 곳부터,
+      // 메모 본문을 실을 자리를 미리 나눈다. `inline` 은 도면 장들의 빈 곳을 앞 장부터,
       // `appendix` 는 별지부터 채운다.
       const memoPages = planMemoPages(
         memoMode,
         memos,
         paper,
-        memoMode === "inline" ? lastSheetGrid(state.doc, plan) : null,
+        memoMode === "inline" ? sheetGrids(state.doc, plan) : null,
       );
-      const inlinePage = memoPages.find((page) => page.onGridSheet) ?? null;
+      const inlinePages = memoPages.filter((page) => page.onGridSheet);
       const extraPages = memoPages.filter((page) => !page.onGridSheet);
 
       const newCanvas = () => {
@@ -260,7 +260,7 @@ export function GridEditor() {
 
         renderPrintSheet(ctx, state.doc, plan, index, state.visible, legend, meta, {
           index: memoIndex,
-          page: inlinePage && inlinePage.gridSheetIndex === index ? inlinePage : null,
+          page: inlinePages.find((page) => page.gridSheetIndex === index) ?? null,
         });
         downloadCanvasPng(canvas, `${base}-${printSheetSuffix(plan, index)}.png`);
       }
@@ -414,15 +414,15 @@ export function GridEditor() {
     if (!paper || legend.length === 0) return null;
     return {
       items: legend,
-      bandCells: legendBandCells(paper, legend.length),
-      columns: legendColumns(paper),
+      bandCells: legendBandCells(paper, legend.length, state.doc.cols),
+      columns: legendColumns(paper, state.doc.cols),
     };
-  }, [legend, state.activePageDoc.paper]);
+  }, [legend, state.activePageDoc.paper, state.doc.cols]);
 
   /**
    * 인쇄물에 실릴 메모 본문의 자리. 경계선 안에 미리 그려 둔다.
    *
-   * `inline` 은 도면 마지막 장의 빈 곳에 얹히므로 그 장의 좌상단 칸을 함께
+   * `inline` 은 도면 장들의 빈 곳에 얹히므로 장마다 그 장의 좌상단 칸을 함께
    * 넘긴다. `appendix` 는 도면 밖 별지라 화면 경계선에는 실을 자리가 없어
    * 미리보기에서 뺀다 — 종이에서 도면 뒤에 따로 붙는다.
    */
@@ -433,22 +433,22 @@ export function GridEditor() {
     if (memoMode !== "inline" || memos.length === 0) return null;
 
     const plan = planPrint(state.doc, paper, legend.length, DEFAULT_PRINT_DPI);
-    const last = lastSheetGrid(state.doc, plan);
-    const inline = planMemoPages(memoMode, memos, paper, last).find((page) => page.onGridSheet);
-    if (!inline) return null;
+    const inline = planMemoPages(memoMode, memos, paper, sheetGrids(state.doc, plan)).filter((page) => page.onGridSheet);
+    if (inline.length === 0) return null;
 
     return {
-      pages: [
-        {
-          block: inline.block,
-          entries: inline.entries,
-          // 이 장의 좌상단 칸. 도면이 여러 장이면 마지막 장으로 밀려 있다.
+      pages: inline.map((page) => {
+        const sheetIndex = page.gridSheetIndex ?? 0;
+        return {
+          block: page.block,
+          entries: page.entries,
+          // 이 자리가 놓인 장의 좌상단 칸.
           originCells: {
-            x: (last.index % plan.across) * plan.sheet.cols,
-            y: Math.floor(last.index / plan.across) * plan.sheet.rows,
+            x: (sheetIndex % plan.across) * plan.sheet.cols,
+            y: Math.floor(sheetIndex / plan.across) * plan.sheet.rows,
           },
-        },
-      ],
+        };
+      }),
       cellMm: paper.cellMm,
       marginMm: paper.marginMm,
       lineMm: MEMO_LINE_MM,
@@ -762,7 +762,6 @@ export function GridEditor() {
           doc={state.doc}
           selectedKey={state.selectedKey}
           selectionRange={state.selectionRange}
-          legend={legend}
           hasClipboard={!!state.clipboard}
           devices={state.project.devices ?? []}
           onSize={actions.setSize}

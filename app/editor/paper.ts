@@ -110,7 +110,7 @@ export function sheetCount(
   legendCount = 0,
 ): { across: number; down: number; total: number } {
   const per = sheetCells(paper);
-  const totalRows = rows + legendBandCells(paper, legendCount);
+  const totalRows = rows + legendBandCells(paper, legendCount, cols);
   const across = Math.max(1, Math.ceil(cols / per.cols));
   const down = Math.max(1, Math.ceil(totalRows / per.rows));
   return { across, down, total: across * down };
@@ -156,17 +156,26 @@ export const LEGEND_ENTRY_MM = 45;
 export const LEGEND_ROW_MM = 6;
 export const LEGEND_GAP_MM = 4;
 
-/** 한 장 너비에 범례를 몇 칸씩 늘어놓을 수 있는지. */
-export function legendColumns(paper: PagePaper): number {
+/**
+ * 범례를 몇 칸씩 늘어놓을 수 있는지.
+ *
+ * 띠는 **격자 너비**만큼만 그린다(`gridCols`). 인쇄영역 너비로 잡으면 가로 용지에서
+ * 격자 오른쪽 빈 자리까지 띠가 차지해, 그 자리에 실리는 메모가 위아래로 잘린다.
+ * 격자 오른쪽은 메모 몫이고 범례는 격자 아래에만 머문다. 격자가 한 장보다 넓으면
+ * 띠도 그만큼 길어져 열이 늘어난다. `gridCols` 를 안 주면 인쇄영역 너비를 쓴다.
+ */
+export function legendColumns(paper: PagePaper, gridCols?: number): number {
   const { widthMm } = paperSizeMm(paper);
   const marginMm = Math.min(MAX_MARGIN_MM, Math.max(0, paper.marginMm));
-  return Math.max(1, Math.floor((widthMm - marginMm * 2) / LEGEND_ENTRY_MM));
+  const cellMm = Math.min(MAX_CELL_MM, Math.max(MIN_CELL_MM, paper.cellMm));
+  const bandWidthMm = gridCols !== undefined && gridCols > 0 ? gridCols * cellMm : widthMm - marginMm * 2;
+  return Math.max(1, Math.floor(bandWidthMm / LEGEND_ENTRY_MM));
 }
 
-/** 범례 띠가 차지하는 격자 행 수. 항목이 없으면 0 이다. */
-export function legendBandCells(paper: PagePaper, legendCount: number): number {
+/** 범례 띠가 차지하는 격자 행 수. 항목이 없으면 0 이다. 너비는 `legendColumns` 와 같은 셈이다. */
+export function legendBandCells(paper: PagePaper, legendCount: number, gridCols?: number): number {
   if (legendCount <= 0) return 0;
   const cellMm = Math.min(MAX_CELL_MM, Math.max(MIN_CELL_MM, paper.cellMm));
-  const rows = Math.ceil(legendCount / legendColumns(paper));
+  const rows = Math.ceil(legendCount / legendColumns(paper, gridCols));
   return Math.ceil((LEGEND_GAP_MM + rows * LEGEND_ROW_MM) / cellMm);
 }

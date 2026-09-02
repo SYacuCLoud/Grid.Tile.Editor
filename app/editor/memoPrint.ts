@@ -94,6 +94,13 @@ export const MEMO_COL_MIN_MM = 32;
 export const MEMO_GAP_MM = 4;
 /** 본문 글자 크기(mm). 현장에서 들고 읽을 수 있는 하한이다. */
 export const MEMO_TEXT_MM = 2.6;
+/**
+ * 메모 자리 안쪽 여백(mm).
+ *
+ * 자리(`MemoBlock`)는 테두리 기준이고 글자는 이만큼 안쪽에서 시작한다. 여백 없이
+ * 테두리에 바로 붙이면 첫 줄 윗부분이 선과 겹쳐 잘려 보인다.
+ */
+export const MEMO_PAD_MM = 1.5;
 
 /** 이 아래로는 빈 곳이 좁아 메모를 실을 수 없다. 한 줄도 못 들어가면 새 장으로 보낸다. */
 const MEMO_MIN_LINES = 2;
@@ -113,13 +120,31 @@ export interface MemoBlock {
 }
 
 /**
+ * 한 열의 글자 폭(mm). 양옆 안쪽 여백을 뺀 폭을 열 수로 나눈다.
+ *
+ * 장 나누기 · 화면 미리보기 · 인쇄가 모두 이 값을 써야 한다 — 어느 하나가 다른
+ * 폭으로 접으면 미리보기와 종이가 다른 줄 수를 낸다.
+ */
+export function memoColumnWidthMm(block: Pick<MemoBlock, "widthMm" | "columns">): number {
+  return Math.max(1, (block.widthMm - MEMO_PAD_MM * 2) / Math.max(1, block.columns));
+}
+
+/** 자리 높이에 들어가는 줄 수. 위아래 안쪽 여백을 뺀다. */
+function linesIn(heightMm: number): number {
+  return Math.floor((heightMm - MEMO_PAD_MM * 2) / MEMO_LINE_MM);
+}
+
+/**
  * 용지에서 격자가 쓰고 남은 자리.
  *
  * 세로 용지는 아래가, 가로 용지는 오른쪽이 넓다 — 넓은 쪽을 쓴다. 둘 다 좁으면
  * `null` 이고, 부르는 쪽이 새 장으로 넘긴다.
  *
  * `gridColsOnSheet` · `gridRowsOnSheet` 는 **이 장에 실제로 실리는** 격자 칸 수다.
- * 도면이 여러 장에 걸치면 마지막 장만 빈 곳이 남는다.
+ * 도면이 여러 장에 걸치면 오른쪽 끝 · 아래 끝 장에만 빈 곳이 남는다.
+ *
+ * 범례 띠(`bandCells`)는 격자 아래에 **격자 너비만큼** 놓인다. 아래 자리는 띠
+ * 아래부터 쓰고, 오른쪽 자리는 띠와 만나지 않으므로 인쇄영역 높이를 다 쓴다.
  */
 export function memoBlockOnSheet(
   paper: PagePaper,
@@ -169,7 +194,7 @@ export function memoBlockOnSheet(
     if (pick.bottom) {
       // 아래는 폭이 인쇄영역 전체라 열 수만 정하면 된다.
       const columns = Math.max(1, Math.floor(usableW / MEMO_COL_MM));
-      const linesPerColumn = Math.floor(room / MEMO_LINE_MM);
+      const linesPerColumn = linesIn(room);
       if (linesPerColumn < MEMO_MIN_LINES) continue;
       return {
         xMm: marginMm,
@@ -186,7 +211,9 @@ export function memoBlockOnSheet(
     // 알맞은 너비가 안 되어도 최소 너비만 넘으면 쓴다. 종이 오른쪽이 눈에 띄게
     // 비어 있는데 메모를 별지로 보내면 자리를 버린 것처럼 보인다.
     if (room < MEMO_COL_MIN_MM) continue;
-    const linesPerColumn = Math.floor(usableH / MEMO_LINE_MM);
+    // 오른쪽 자리는 인쇄영역 높이를 다 쓴다. 범례 띠는 격자 너비만큼만 그려지므로
+    // (`legendColumns`) 격자 오른쪽에서는 띠와 만나지 않는다.
+    const linesPerColumn = linesIn(usableH);
     if (linesPerColumn < MEMO_MIN_LINES) continue;
     return {
       xMm: marginMm + gridW + MEMO_GAP_MM,
@@ -212,7 +239,7 @@ export function memoBlockOnBlankSheet(paper: PagePaper): MemoBlock {
   const usableH = Math.floor((heightMm - marginMm * 2) / cellMm) * cellMm;
 
   const columns = Math.max(1, Math.floor(usableW / MEMO_COL_MM));
-  const linesPerColumn = Math.max(MEMO_MIN_LINES, Math.floor(usableH / MEMO_LINE_MM));
+  const linesPerColumn = Math.max(MEMO_MIN_LINES, linesIn(usableH));
 
   return {
     xMm: marginMm,
@@ -261,20 +288,34 @@ export interface MemoPage {
   block: MemoBlock;
 }
 
+/** 도면 한 장에 실리는 격자 몫. `printSheet.sheetGrids` 가 장마다 하나씩 만든다. */
+export interface SheetGrid {
+  /** 장 번호(0부터). */
+  index: number;
+  gridCols: number;
+  gridRows: number;
+  bandCells: number;
+}
+
 /**
  * 메모를 장마다 나눈다.
  *
- * `inline` 은 도면 마지막 장의 빈 곳부터 채우고 넘치면 새 장으로 이어 붙인다.
+ * `inline` 은 도면 장들의 빈 곳을 **앞 장부터** 채우고, 넘치면 새 장으로 이어 붙인다.
+ * 어느 장이든 격자가 다 쓰지 않은 자리(오른쪽 · 아래)가 있으면 그 장에 싣는다 —
+ * 범례 띠 때문에 마지막 장에 띠 몇 줄만 넘어간 도면에서, 첫 장 오른쪽이 통째로
+ * 비어 있는데 메모가 다음 장으로 가면 자리를 버린 것으로 보인다.
  * `appendix` 는 도면에 섞지 않고 새 장부터 시작한다.
  *
  * 빈 곳이 없거나(`memoBlockOnSheet` 가 `null`) 남은 메모가 없으면 그만큼 장이
  * 줄어든다 — 메모가 없으면 빈 장을 만들지 않는다.
+ *
+ * `sheets` 는 장 목록이다. 하나만 넘겨도 된다(예전 호출 · 테스트).
  */
 export function planMemoPages(
   mode: MemoPrintMode,
   entries: MemoEntry[],
   paper: PagePaper,
-  lastSheet: { index: number; gridCols: number; gridRows: number; bandCells: number } | null,
+  sheets: SheetGrid | SheetGrid[] | null,
 ): MemoPage[] {
   if (mode === "off" || entries.length === 0) return [];
 
@@ -283,7 +324,7 @@ export function planMemoPages(
 
   /** 이 자리에 들어가는 만큼 떼어 낸다. 한 건도 안 들어가면 빈 배열. */
   const take = (block: MemoBlock): MemoEntry[] => {
-    const columnWidthMm = block.widthMm / Math.max(1, block.columns);
+    const columnWidthMm = memoColumnWidthMm(block);
     const taken: MemoEntry[] = [];
     let used = 0;
     let column = 0;
@@ -313,12 +354,15 @@ export function planMemoPages(
     return taken;
   };
 
-  if (mode === "inline" && lastSheet) {
-    const block = memoBlockOnSheet(paper, lastSheet.gridCols, lastSheet.gridRows, lastSheet.bandCells);
-    if (block) {
+  if (mode === "inline" && sheets) {
+    const list = (Array.isArray(sheets) ? sheets : [sheets]).slice().sort((a, b) => a.index - b.index);
+    for (const sheet of list) {
+      if (rest.length === 0) break;
+      const block = memoBlockOnSheet(paper, sheet.gridCols, sheet.gridRows, sheet.bandCells);
+      if (!block) continue;
       const taken = take(block);
       if (taken.length > 0) {
-        pages.push({ entries: taken, onGridSheet: true, gridSheetIndex: lastSheet.index, block });
+        pages.push({ entries: taken, onGridSheet: true, gridSheetIndex: sheet.index, block });
       }
     }
   }

@@ -7,14 +7,16 @@ import {
   MEMO_COL_MIN_MM,
   MEMO_GAP_MM,
   MEMO_LINE_MM,
+  MEMO_PAD_MM,
   MEMO_TEXT_MM,
   memoBlockOnBlankSheet,
   memoBlockOnSheet,
+  memoColumnWidthMm,
   memoLineCount,
   memoNumbers,
   planMemoPages,
 } from "../app/editor/memoPrint.ts";
-import { lastSheetGrid, mmToPx, planPrint } from "../app/editor/printSheet.ts";
+import { lastSheetGrid, mmToPx, planPrint, sheetGrids } from "../app/editor/printSheet.ts";
 import { canvasCells } from "../app/editor/render.ts";
 
 /** 메모가 적힌 칸을 흩뿌린 페이지. 좌표를 일부러 뒤섞어 넣는다. */
@@ -104,6 +106,30 @@ test("메모 자리: 범례 띠 몫을 빼고 남은 자리를 센다", () => {
   assert.ok(withBand.capacity < without.capacity, "범례가 자리를 먹지 않았다");
 });
 
+test("메모 자리: 오른쪽 자리는 범례 띠와 만나지 않고 인쇄영역 높이를 다 쓴다", () => {
+  // 가로 A4, 칸 5mm, 여백 10mm → 인쇄영역 277x190 = 55x38칸. 격자 30x34 + 범례 띠 2행.
+  const paper = { ...defaultPaper("a4"), orientation: "landscape", cellMm: 5, marginMm: 10 };
+  const gridCols = 30;
+  const gridRows = 34;
+  const bandCells = 2;
+
+  const right = memoBlockOnSheet(paper, gridCols, gridRows, bandCells);
+  assert.ok(right, "오른쪽에 자리가 없다");
+
+  // 띠는 격자 너비(여백 + 30칸 = 160mm)까지만 그려진다. 메모는 그 오른쪽에서 시작하니
+  // 띠 행(34~36행)에 걸쳐도 겹치지 않고, 위에서 아래까지 다 쓴다.
+  const bandRightMm = 10 + gridCols * 5;
+  assert.ok(right.xMm >= bandRightMm, "메모 자리가 범례 띠 위로 들어왔다");
+  assert.equal(right.yMm, 10);
+  assert.equal(right.heightMm, 190);
+
+  // 띠가 있든 없든 오른쪽 자리는 같다 — 띠는 격자 아래에만 있다.
+  const noBand = memoBlockOnSheet(paper, gridCols, gridRows, 0);
+  assert.ok(noBand);
+  assert.equal(noBand.heightMm, right.heightMm);
+  assert.equal(noBand.capacity, right.capacity);
+});
+
 test("메모 자리: 격자가 용지를 꽉 채우면 자리가 없다", () => {
   const paper = { ...defaultPaper("a4"), orientation: "portrait", cellMm: 5, marginMm: 10 };
   // 38x55칸이 한 장 정원. 꽉 채우면 남는 곳이 없다.
@@ -143,6 +169,51 @@ test("메모 나누기: 빈 곳에 채우고 넘치면 다음 장으로 이어 �
   );
   // 번호 순서가 유지된다 — 뒤섞이면 도면의 번호를 찾을 수 없다.
   assert.deepEqual(carried, [...carried].sort((a, b) => a - b));
+});
+
+test("메모 자리: 안쪽 여백만큼 글자가 테두리에서 떨어진다", () => {
+  const paper = { ...defaultPaper("a4"), orientation: "landscape", cellMm: 5, marginMm: 10 };
+
+  for (const block of [memoBlockOnSheet(paper, 30, 20, 0), memoBlockOnBlankSheet(paper)]) {
+    assert.ok(block);
+    // 줄 수는 위아래 여백을 뺀 높이로 센다 — 마지막 줄이 테두리에 닿지 않는다.
+    assert.ok(block.linesPerColumn * MEMO_LINE_MM + MEMO_PAD_MM * 2 <= block.heightMm, "줄이 아래 여백을 넘는다");
+    assert.ok((block.linesPerColumn + 1) * MEMO_LINE_MM + MEMO_PAD_MM * 2 > block.heightMm, "줄을 덜 세었다");
+    // 열 폭도 양옆 여백을 뺀 폭을 나눈다.
+    const inner = memoColumnWidthMm(block) * block.columns + MEMO_PAD_MM * 2;
+    assert.ok(Math.abs(inner - block.widthMm) < 1e-9, "열 폭에 여백이 빠지지 않았다");
+  }
+});
+
+test("메모 나누기: 첫 장 오른쪽이 비어 있으면 거기부터 싣는다 (마지막 장만 보지 않는다)", () => {
+  // 가로 A4, 칸 5mm, 여백 10mm → 한 장 55x38칸. 격자 40x27 은 한 장에 들어가지만,
+  // 범례 13개(격자 200mm → 4열 → 4줄 → 띠 6행)를 더하면 33행이 넘어 아래로 한 장 더 생긴다.
+  const paper = { ...defaultPaper("a4"), orientation: "landscape", cellMm: 5, marginMm: 10 };
+  const doc = { cols: 40, rows: 36 };
+  const plan = planPrint(doc, paper, 13);
+  assert.equal(plan.down, 2, "범례 띠로 두 장이 되어야 하는 도면이다");
+
+  const sheets = sheetGrids(doc, plan);
+  assert.equal(sheets.length, 2);
+  // 첫 장은 격자 40x36 + 띠 2행, 둘째 장은 띠 나머지만 남는다.
+  assert.equal(sheets[0].gridCols, 40);
+  assert.equal(sheets[0].gridRows, 36);
+  assert.ok(sheets[1].gridRows === 0 && sheets[1].bandCells > 0);
+
+  const { page } = pageWithMemos([
+    [1, 1, "선별된 함빼 위치 리더 확인"],
+    [5, 2, "바코드 프린터 필요 여부"],
+  ]);
+  const pages = planMemoPages("inline", collectMemos(page), paper, sheets);
+  assert.equal(pages.length, 1);
+  // 첫 장 오른쪽(15칸 = 75mm)에 자리가 있으니 거기에 싣는다 — 둘째 장으로 가지 않는다.
+  assert.equal(pages[0].onGridSheet, true);
+  assert.equal(pages[0].gridSheetIndex, 0);
+  assert.ok(pages[0].block.xMm >= 10 + 40 * 5, "첫 장 격자 오른쫠 자리가 아니다");
+
+  // 마지막 장 하나만 넘기는 예전 호출도 그대로 된다.
+  const onlyLast = planMemoPages("inline", collectMemos(page), paper, sheets[1]);
+  assert.equal(onlyLast[0].gridSheetIndex, 1);
 });
 
 test("메모 나누기: 별지는 도면 장에 얹지 않는다", () => {

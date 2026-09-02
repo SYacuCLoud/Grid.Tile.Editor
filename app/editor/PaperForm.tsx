@@ -1,6 +1,6 @@
 "use client";
 
-import { DEFAULT_PRINT_DPI, lastSheetGrid, planPrint } from "./printSheet";
+import { DEFAULT_PRINT_DPI, planPrint, sheetGrids } from "./printSheet";
 import { type MemoEntry, planMemoPages } from "./memoPrint";
 import {
   DEFAULT_CELL_MM,
@@ -58,7 +58,7 @@ export function PaperForm(props: PaperFormProps) {
 
   const per = sheetCells(paper);
   const count = sheetCount(paper, cols, rows, props.legendCount);
-  const band = legendBandCells(paper, props.legendCount);
+  const band = legendBandCells(paper, props.legendCount, cols);
   const size = paperSizeMm(paper);
   const memoMode = paper.memoMode ?? DEFAULT_MEMO_MODE;
 
@@ -71,7 +71,7 @@ export function PaperForm(props: PaperFormProps) {
           memoMode,
           props.memos,
           paper,
-          memoMode === "inline" ? lastSheetGrid({ cols, rows }, plan) : null,
+          memoMode === "inline" ? sheetGrids({ cols, rows }, plan) : null,
         );
 
   const update = (patch: Partial<PagePaper>) => props.onChange({ ...paper, ...patch });
@@ -184,7 +184,7 @@ export function PaperForm(props: PaperFormProps) {
             ? "실을 메모가 없습니다."
             : `메모 ${props.memoCount}건 · ${
                 memoPages.some((page) => page.onGridSheet)
-                  ? `마지막 장 빈 곳${
+                  ? `도면 장 빈 곳${
                       memoPages.filter((page) => !page.onGridSheet).length > 0
                         ? ` + 추가 ${memoPages.filter((page) => !page.onGridSheet).length}장`
                         : ""

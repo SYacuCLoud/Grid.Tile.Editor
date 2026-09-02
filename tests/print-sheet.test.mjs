@@ -77,7 +77,7 @@ test("계획: 장수와 장당 칸 수가 화면 경계선 계산과 같다", ()
   assert.equal(plan.across, expected.across);
   assert.equal(plan.down, expected.down);
   assert.equal(plan.total, expected.total);
-  assert.equal(plan.bandCells, legendBandCells(A4_PORTRAIT, legend.length));
+  assert.equal(plan.bandCells, legendBandCells(A4_PORTRAIT, legend.length, 120));
 });
 
 test("계획: DPI 는 범위 안으로 다듬고 기본값은 150 이다", () => {
