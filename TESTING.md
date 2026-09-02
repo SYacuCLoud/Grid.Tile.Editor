@@ -10,8 +10,13 @@ Grid Tile Editor의 자동 테스트 실행 방법과 브라우저에서 직접 
 ## 자동 테스트
 
 ```bash
-npm test
+npm run test:unit   # 로직 테스트만 — 빌드 없이 약 4초. 작업 중 수시로 돌린다
+npm run test:render # 서버 렌더 테스트 — 먼저 npm run build 가 필요하다
+npm test            # 타입 검사 → 빌드 → 렌더 → 로직. 커밋 전에 한 번
 ```
+
+단위 테스트 실행은 몇 초지만 `npm test` 의 1~2분은 타입 검사와 프로덕션 빌드가 차지한다.
+그래서 평소에는 `test:unit` 만 돌리고, 전체는 커밋 전에 돈다.
 
 | 파일 | 검증 대상 |
 |---|---|
