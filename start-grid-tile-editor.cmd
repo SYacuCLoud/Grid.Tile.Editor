@@ -1,9 +1,10 @@
 @echo off
-title Grid Tile Editor
-cd /d "C:\_DX\Grid.Tile.Editor"
-set PORT=3100
-echo ===================================================
-echo   Starting Grid Tile Editor (http://localhost:3100)
-echo ===================================================
-start /b cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:3100"
-npm start
+rem Grid Tile Editor - make sure the 3100 service is up, then open it in the browser.
+call "%~dp0scripts\service.cmd" start
+if errorlevel 1 (
+  echo.
+  echo The service did not start. Run scripts\service.cmd status or check logs\server.log
+  pause
+  exit /b 1
+)
+start "" http://localhost:3100

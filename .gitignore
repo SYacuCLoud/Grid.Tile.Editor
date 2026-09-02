@@ -50,3 +50,6 @@ tsconfig.tsbuildinfo
 
 # 서버 실행 로그
 /logs/
+
+# 3100 always-on service: dist snapshot + daemon lock
+/.serve/
