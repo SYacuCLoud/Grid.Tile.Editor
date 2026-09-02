@@ -13,7 +13,7 @@
     "deploy": "cmd /c scripts\\service.cmd deploy",
     "service": "cmd /c scripts\\service.cmd",
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/range-clipboard.test.mjs tests/multipage.test.mjs tests/render-legend.test.mjs tests/cell-text.test.mjs tests/zoom.test.mjs tests/paper.test.mjs tests/pattern.test.mjs tests/palette-collapse.test.mjs tests/layers.test.mjs tests/print-sheet.test.mjs tests/ruler-watermark.test.mjs tests/diff-photo.test.mjs tests/photo-ledger.test.mjs tests/photo-lightbox.test.mjs tests/opacity.test.mjs tests/memo-print.test.mjs tests/note-bubble.test.mjs tests/zone.test.mjs tests/device.test.mjs tests/connection.test.mjs tests/mcp-tools.test.mjs tests/projects-api.test.mjs",
+    "test": "npm run typecheck && npm run build && node --test tests/rendered-html.test.mjs tests/rendered-mobile.test.mjs && tsx --test tests/range-clipboard.test.mjs tests/multipage.test.mjs tests/render-legend.test.mjs tests/cell-text.test.mjs tests/zoom.test.mjs tests/paper.test.mjs tests/pattern.test.mjs tests/palette-collapse.test.mjs tests/layers.test.mjs tests/print-sheet.test.mjs tests/ruler-watermark.test.mjs tests/diff-photo.test.mjs tests/photo-ledger.test.mjs tests/photo-lightbox.test.mjs tests/opacity.test.mjs tests/memo-print.test.mjs tests/note-bubble.test.mjs tests/zone.test.mjs tests/device.test.mjs tests/connection.test.mjs tests/mcp-tools.test.mjs tests/projects-api.test.mjs tests/mobile-view.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "mcp:build": "vite build --config vite.mcp.config.ts",
