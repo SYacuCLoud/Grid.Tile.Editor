@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createProject } from "../app/editor/doc.ts";
 import { renderDoc, renderSheet } from "../app/editor/render.ts";
-import { legendItems, legendItemsForPage, legendItemsForProject } from "../app/editor/paletteOps.ts";
+import { legendItems, legendItemsForPage, legendItemsForProject, legendLabel, usageCount } from "../app/editor/paletteOps.ts";
 import { recordingContext, VISIBLE } from "./recording-context.mjs";
 
 
@@ -146,10 +146,10 @@ test("PNG 범례: 디스플레이 이름과 설명을 함께 찍는다", () => {
 
   const texts = ctx.ops.filter((o) => o.op === "fillText").map((o) => o.text);
 
-  // 기본 항목의 디스플레이 이름과 설명이 모두 나온다.
-  assert.ok(texts.includes("설치 (정상)"), "상태 디스플레이 이름이 없다");
+  // 기본 항목의 디스플레이 이름 + 이 페이지 칸 수, 설명이 모두 나온다.
+  assert.ok(texts.includes("설치 (정상) (1)"), "상태 디스플레이 이름이 없다");
   assert.ok(texts.includes(" — 설치 완료 · 통신 정상"), "상태 설명이 없다");
-  assert.ok(texts.includes("리더"), "장비 디스플레이 이름이 없다");
+  assert.ok(texts.includes("리더 (1)"), "장비 디스플레이 이름이 없다");
   assert.ok(texts.includes(" — 식별 리더기"), "장비 설명이 없다");
 
   // 설명이 없는 항목은 구분선만 덩그러니 찍히지 않는다.
@@ -266,8 +266,8 @@ test("인쇄 경계선: 범례 띠가 도면 아래에 그려지고 경계 안�
     printLegend: { items: legend, bandCells: 3, columns: 6 },
   });
 
-  // 범례 이름이 도면 아래쪽(30행 밑)에 찍힌다.
-  const names = new Set(legend.map((item) => item.name));
+  // 범례 이름(+ 이 페이지 칸 수)이 도면 아래쪽(30행 밑)에 찍힌다.
+  const names = new Set(legend.map((item) => `${item.name} (1)`));
   const drawn = ctx.ops.filter((o) => o.op === "fillText" && names.has(o.text));
   assert.ok(drawn.length > 0, "범례 이름이 하나도 안 그려졌다");
   assert.ok(
@@ -279,4 +279,18 @@ test("인쇄 경계선: 범례 띠가 도면 아래에 그려지고 경계 안�
   const horizontal = guideLines(ctx.ops).filter((l) => l.from.y === l.to.y);
   assert.equal(horizontal.length, 1);
   assert.ok(horizontal[0].from.y > 33 * cell, "경계선이 범례 띠보다 위에 있다");
+});
+
+test("범례 글: 칸 수를 주면 이름 뒤에 붙고, 0 이면 이름만", () => {
+  const project = createProject("개수");
+  const page = project.pages[0];
+  page.equipment["1,1"] = { kind: "reader" };
+  page.equipment["2,1"] = { kind: "reader" };
+  page.equipment["3,1"] = { kind: "reader" };
+  const reader = project.palette.find((item) => item.id === "reader");
+  const wall = project.palette.find((item) => item.id === "wall");
+
+  assert.equal(legendLabel(reader, usageCount(page, reader)), `${reader.name} (3)`);
+  assert.equal(legendLabel(wall, usageCount(page, wall)), wall.name);
+  assert.equal(legendLabel(wall), wall.name);
 });

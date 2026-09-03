@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { layerCellCount, type ProjectDoc } from "./doc";
+import { activePage, layerCellCount, type ProjectDoc } from "./doc";
 import { LayerAddForm, LayerRow } from "./LayerControls";
 import { type LayerInput, layerSections, MAX_LAYERS } from "./layers";
-import { itemsOfSection, type LayerId, NEW_ITEM_COLOR, type PaletteId, type PaletteRole } from "./palette";
-import { type DeleteMode, type PaletteInput, usageCountInProject } from "./paletteOps";
+import { itemsOfSection, type LayerId, NEW_ITEM_COLOR, type PaletteId, type PaletteItem, type PaletteRole } from "./palette";
+import { type DeleteMode, type PaletteInput, usageCount, usageCountInProject } from "./paletteOps";
 import { type CollapseKey, expandCollapsed, isCollapsed, loadCollapsed, saveCollapsed, toggleCollapsed } from "./paletteCollapse";
 import { PaletteDeleteConfirm } from "./PaletteDeleteConfirm";
 import { PaletteItemForm } from "./PaletteItemForm";
@@ -48,6 +48,27 @@ interface PalettePanelProps {
   onToggleZoneLegend: (id: string) => void;
   /** 구역 전체를 도면에서 감춘다/보인다. 레이어가 아니라 별도 핸들러다. */
   onToggleZones: () => void;
+}
+
+/**
+ * 항목이 쓰인 칸 수. 팔레트는 프로젝트 공용이라 모든 페이지 합계를 보이고,
+ * 범례(페이지 기준)와 숫자가 다를 수 있어 툴팁에 두 숫자를 함께 적는다.
+ * 0 이면 비운다 — 안 쓴 항목까지 숫자를 달면 목록이 시끄럽다.
+ */
+function UsageBadge({ project, item }: { project: ProjectDoc; item: PaletteItem }) {
+  const total = usageCountInProject(project, item);
+  if (total === 0) return null;
+  const onPage = usageCount(activePage(project), item);
+  const pages = project.pages.length;
+  const title =
+    pages > 1
+      ? `${pages}면 합계 ${total}칸 · 이 페이지 ${onPage}칸`
+      : `이 페이지 ${onPage}칸`;
+  return (
+    <span className="shrink-0 px-0.5 text-[10px] tabular-nums text-slate-400" title={title} aria-label={title}>
+      {total}
+    </span>
+  );
 }
 
 export function PalettePanel(props: PalettePanelProps) {
@@ -290,6 +311,8 @@ export function PalettePanel(props: PalettePanelProps) {
                             <PaletteSwatch item={item} />
                             <span className="truncate">{item.name}</span>
                           </button>
+
+                          <UsageBadge project={props.project} item={item} />
 
                           {section.editable ? (
                             <>

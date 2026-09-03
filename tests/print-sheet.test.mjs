@@ -181,7 +181,8 @@ test("렌더: 범례 띠가 도면 아래에 함께 실린다", () => {
   const ctx = recordingContext();
   renderPrintSheet(ctx, doc, plan, 0, VISIBLE, legend);
 
-  const names = legend.map((item) => item.name);
+  // 범례 글은 "이름 (이 페이지 칸 수)" 꼴이다.
+  const names = legend.map((item) => `${item.name} (1)`);
   const printed = ctx.ops.filter((op) => op.op === "fillText").map((op) => op.text);
   assert.ok(names.some((name) => printed.includes(name)), "범례 이름이 찍혀야 한다");
 });

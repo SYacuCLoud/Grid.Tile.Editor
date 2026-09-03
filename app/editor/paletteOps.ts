@@ -433,7 +433,12 @@ export function legendItemsForProject(project: ProjectDoc): PaletteItem[] {
   return buildLegend(project.palette, project.pages);
 }
 
-/** 범례 · 목록에 보일 디스플레이 이름. */
-export function legendLabel(item: PaletteItem): string {
-  return item.name;
+/**
+ * 범례 · 목록에 보일 디스플레이 이름.
+ *
+ * `count` 를 주면 "리더 (12)" 처럼 칸 수를 붙인다. 0 이하면 이름만 — 구역처럼
+ * 칸에 칠하지 않는 항목이 범례에 섞여도 "(0)" 이 붙지 않는다.
+ */
+export function legendLabel(item: PaletteItem, count?: number): string {
+  return count && count > 0 ? `${item.name} (${count})` : item.name;
 }

@@ -13,7 +13,7 @@ import {
   type WireId,
 } from "./palette";
 import { MEMO_PAD_MM, memoColumnWidthMm } from "./memoPrint";
-import { legendItems, legendLabel } from "./paletteOps";
+import { legendItems, legendLabel, usageCount } from "./paletteOps";
 import { dashArray, fillCellPattern } from "./pattern";
 import { type CellRange } from "./range";
 import { type SheetMeta, watermarkText } from "./watermark";
@@ -1085,11 +1085,13 @@ function renderOverlays(
 
       drawLegendSwatch(ctx, item, x, y, box);
 
+      // 인쇄물과 같은 글 — 이름 뒤에 이 페이지의 칸 수.
+      const label = legendLabel(item, usageCount(doc, item));
       ctx.fillStyle = LABEL_COLOR;
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      fitText(ctx, item.name, colWidth - box - 12, Math.max(8, box * 0.8));
-      ctx.fillText(item.name, x + box + 5, y + box / 2);
+      fitText(ctx, label, colWidth - box - 12, Math.max(8, box * 0.8));
+      ctx.fillText(label, x + box + 5, y + box / 2);
     });
 
     ctx.restore();
@@ -1277,8 +1279,8 @@ export function renderSheet(
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
 
-    // 디스플레이 이름을 먼저 찍고, 설명이 있으면 옅은 색으로 이어 붙인다.
-    const label = legendLabel(item);
+    // 디스플레이 이름 + 이 도면의 칸 수를 먼저 찍고, 설명이 있으면 옅은 색으로 이어 붙인다.
+    const label = legendLabel(item, usageCount(doc, item));
     const nameSize = fitText(ctx, label, room, 13);
     const nameWidth = ctx.measureText(label).width;
     ctx.fillStyle = LABEL_COLOR;
