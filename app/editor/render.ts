@@ -1,5 +1,5 @@
 import { arcControlPoint, CONNECTION_COLOR, CONNECTION_LAYER_ID, type ConnectionSegment } from "./connection";
-import { cellKey, cellOpacity, cellPhotos, type LayoutDoc, paintedCells, type Point } from "./doc";
+import { cellKey, cellOpacity, cellPhotos, cellVideos, type LayoutDoc, paintedCells, type Point } from "./doc";
 import { defaultLayers, type LayerDef } from "./layers";
 import {
   indexPalette,
@@ -848,15 +848,18 @@ function drawEquipmentLayer(
     // 자리를 달리해 둘이 함께 있어도 구분된다.
     // 두 장 이상이면 네모 오른쪽에 장수를 적는다 — 열어 보지 않아도 몇 장인지 안다.
     const photos = cellPhotos(data);
+    const size = Math.max(4, Math.round(cell * 0.18));
+    const top = py + cell - size - 2;
+    // 영상 표시(▶)가 놓일 왼쪽 자리. 사진 네모와 장수 글자 뒤로 밀린다.
+    let nextLeft = px + 2;
     if (photos.length > 0) {
-      const size = Math.max(4, Math.round(cell * 0.18));
-      const top = py + cell - size - 2;
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(px + 2, top, size, size);
       ctx.strokeStyle = "#111827";
       ctx.lineWidth = 1;
       ctx.setLineDash([]);
       ctx.strokeRect(px + 2.5, top + 0.5, size - 1, size - 1);
+      nextLeft = px + size + 4;
 
       if (photos.length > 1 && cell >= 18) {
         const fontSize = Math.max(7, Math.round(cell * 0.24));
@@ -864,11 +867,37 @@ function drawEquipmentLayer(
         ctx.textAlign = "left";
         ctx.textBaseline = "bottom";
         ctx.fillStyle = "#111827";
-        ctx.fillText(`${photos.length}`, px + size + 4, py + cell - 2);
+        ctx.fillText(`${photos.length}`, nextLeft, py + cell - 2);
+        nextLeft += ctx.measureText(`${photos.length}`).width + 3;
+      }
+    }
+
+    // 영상이 붙은 칸은 같은 줄에 작은 재생 삼각형(▶)을 둔다. 사진 네모와 나란히
+    // 놓여 "사진도 영상도 있다" 가 한 줄로 읽힌다.
+    const videos = cellVideos(data);
+    if (videos.length > 0) {
+      ctx.fillStyle = VIDEO_MARK_COLOR;
+      ctx.beginPath();
+      ctx.moveTo(nextLeft, top);
+      ctx.lineTo(nextLeft + size, top + size / 2);
+      ctx.lineTo(nextLeft, top + size);
+      ctx.closePath();
+      ctx.fill();
+
+      if (videos.length > 1 && cell >= 18) {
+        const fontSize = Math.max(7, Math.round(cell * 0.24));
+        ctx.font = `${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+        ctx.fillStyle = VIDEO_MARK_COLOR;
+        ctx.fillText(`${videos.length}`, nextLeft + size + 2, py + cell - 2);
       }
     }
   }
 }
+
+/** 영상 표시(▶) 색. 사진 네모(검정 테두리)와 갈리게 진한 남색이다. */
+const VIDEO_MARK_COLOR = "#1d4ed8";
 
 /**
  * 인쇄물에 실릴 메모 본문을 화면에 미리 그린다.

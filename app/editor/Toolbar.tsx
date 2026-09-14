@@ -136,6 +136,8 @@ interface ToolbarProps {
   /** 장치 대장에 오른 장치 수. 단추에 함께 보인다. */
   deviceCount: number;
   onOpenDevices: () => void;
+  /** 실시간 현황판(/live) 주소. 서버에 열린 도면이 있으면 그 도면 · 페이지가 바로 열리는 주소다. */
+  liveHref: string;
   onLoadSample: () => void;
   onReset: () => void;
 }
@@ -296,6 +298,16 @@ export function Toolbar(props: ToolbarProps) {
         >
           장치 대장{props.deviceCount > 0 ? ` (${props.deviceCount}대)` : ""}
         </button>
+        {/* 새 탭으로 연다 — 벽걸이 화면은 편집기와 따로 떠 있어야 한다. */}
+        <a
+          href={props.liveHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${BUTTON} inline-flex items-center`}
+          title="이 도면 위에 RFID 리더의 지금 상태를 MQTT 로 받아 얹어 보이는 읽기 전용 화면을 새 탭에 엽니다 (장치 대장 S/N 으로 칸을 찾습니다)"
+        >
+          실시간 현황판 ↗
+        </a>
         <button type="button" className={BUTTON} onClick={props.onExportJson}>
           JSON 내보내기
         </button>

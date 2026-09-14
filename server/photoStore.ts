@@ -10,6 +10,10 @@
  * 도면 파일 자체(`<id>.json`)는 손대지 않는다 — 편집기 · MCP · 사람이 그대로
  * 읽는 파일이라 사진이 안에 있어야 한다. 이력을 읽을 때는 참조를 다시 data URL 로
  * 채워 주므로 되돌리기 · 충돌 판정은 예전과 같은 도면을 본다.
+ *
+ * 칸 영상(`videos`)도 같은 길로 간다. 영상은 사진보다 열 배쯤 무거워 이력에
+ * 그대로 두면 한 번 저장에 수십 MB 가 쌓이므로, 오히려 영상 쪽이 이 저장소를
+ * 더 필요로 한다. 폴더 이름은 `.photos/` 그대로 둔다 — 이미 있는 폴더를 옮기지 않는다.
  */
 
 import { createHash } from "node:crypto";
@@ -19,12 +23,33 @@ import { join } from "node:path";
 export const PHOTOS_DIR = ".photos";
 export const PHOTO_REF_PREFIX = "photoref:";
 
-const DATA_URL = /^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/=]+)$/;
-const EXT: Record<string, string> = { png: "png", jpeg: "jpg", jpg: "jpg", webp: "webp", gif: "gif" };
-const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
-const REF_FILE = /^[0-9a-f]{40}\.(png|jpg|webp|gif)$/;
+const DATA_URL = /^data:(image\/(?:png|jpeg|jpg|webp|gif)|video\/(?:mp4|webm|quicktime|ogg|x-m4v));base64,([A-Za-z0-9+/=]+)$/;
+const EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
+  "video/ogg": "ogv",
+  "video/x-m4v": "m4v",
+};
+const MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  ogv: "video/ogg",
+  m4v: "video/x-m4v",
+};
+const REF_FILE = /^[0-9a-f]{40}\.(png|jpg|webp|gif|mp4|webm|mov|ogv|m4v)$/;
 
-/** 이 data URL 이 저장될 파일 이름. 우리가 담는 그림이 아니면 null. */
+/** 이 data URL 이 저장될 파일 이름. 우리가 담는 그림 · 영상이 아니면 null. */
 export function photoFileName(dataUrl: string): string | null {
   const match = DATA_URL.exec(dataUrl);
   if (!match) return null;
@@ -47,10 +72,13 @@ function mapCellPhotos(raw: unknown, fn: (value: unknown) => string | null): unk
   const mapCell = (cell: unknown): unknown => {
     if (!cell || typeof cell !== "object") return cell;
     const data = cell as Record<string, unknown>;
-    if (!("photos" in data) && !("photo" in data)) return cell;
+    if (!("photos" in data) && !("photo" in data) && !("videos" in data)) return cell;
     const next: Record<string, unknown> = { ...data };
     if (Array.isArray(data.photos)) {
       next.photos = data.photos.map(fn).filter((value): value is string => value !== null);
+    }
+    if (Array.isArray(data.videos)) {
+      next.videos = data.videos.map(fn).filter((value): value is string => value !== null);
     }
     if ("photo" in data) {
       const mapped = fn(data.photo);

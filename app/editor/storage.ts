@@ -7,6 +7,7 @@ import { ensurePalette } from "./paletteOps";
 import { type PagePaper, sanitizePaper } from "./paper";
 import { DEFAULT_LINE_STYLE, type LineStyle, sanitizeLineStyle } from "./pattern";
 import { sanitizePhotos } from "./photo";
+import { sanitizeVideos } from "./video";
 import { sanitizeZones } from "./zone";
 
 /**
@@ -25,7 +26,7 @@ export const LEGACY_STORAGE_KEY = "rfid-grid-editor:doc:v1";
 /**
  * 설비 칸을 다듬는다.
  *
- * 사진만 검사한다. 도면에 함께 담기는 값이라, 그림이 아닌 문자열이나 지나치게
+ * 사진과 영상만 검사한다. 도면에 함께 담기는 값이라, 그림이 아닌 문자열이나 지나치게
  * 큰 값이 섞여 들어오면 문서를 열 때마다 그 무게를 그대로 짊어진다.
  * 나머지 값(상태 · 장비 · ID · 메모)은 팔레트 조회와 렌더러가 알아서 감당한다.
  *
@@ -44,6 +45,9 @@ function sanitizeEquipment(raw: unknown, inherited: KindStyles = new Map()): Rec
     delete cell.photo;
     if (photos.length > 0) cell.photos = photos;
     else delete cell.photos;
+    const videos = sanitizeVideos(cell.videos);
+    if (videos.length > 0) cell.videos = videos;
+    else delete cell.videos;
     if (typeof cell.deviceId !== "string" || !cell.deviceId) delete cell.deviceId;
 
     // 선 모양 · 진하기는 아는 값만, 기본값(실선 · 불투명)은 필드 없이.

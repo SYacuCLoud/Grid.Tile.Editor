@@ -6,7 +6,15 @@
  * 훑으면 된다.
  */
 
-import { cellPhotos, type CellHolder, type EquipmentCell, type PageDoc, type ProjectDoc, usedLayerIds } from "./doc";
+import {
+  cellPhotos,
+  cellVideos,
+  type CellHolder,
+  type EquipmentCell,
+  type PageDoc,
+  type ProjectDoc,
+  usedLayerIds,
+} from "./doc";
 import type { PaletteItem } from "./palette";
 import { lineStyleName } from "./pattern";
 
@@ -62,6 +70,13 @@ function photoText(cell: EquipmentCell): string | null {
   return `사진=${photos.length}장(${photos.map(photoFingerprint).join(",")})`;
 }
 
+/** 영상 칸도 사진처럼 편수와 지문만 적는다. */
+function videoText(cell: EquipmentCell): string | null {
+  const videos = cellVideos(cell);
+  if (videos.length === 0) return null;
+  return `영상=${videos.length}편(${videos.map(photoFingerprint).join(",")})`;
+}
+
 /** 사진 한 장을 가리키는 짧은 표. data URL 뒤쪽 8자면 서로 갈린다. */
 function photoFingerprint(dataUrl: string): string {
   return dataUrl.slice(-8);
@@ -78,6 +93,7 @@ function equipmentText(cell: EquipmentCell | undefined): string | null {
     cell.lineStyle ? `선=${lineStyleName(cell.lineStyle)}` : null,
     cell.opacity !== undefined ? `진하기=${Math.round(cell.opacity * 100)}%` : null,
     photoText(cell),
+    videoText(cell),
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : null;
 }

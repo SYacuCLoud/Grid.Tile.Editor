@@ -4,6 +4,11 @@ interface CellNoteBubbleProps {
   text: string;
   /** 칸에 붙은 사진들(data URL). 있으면 글 위에 보여 준다. */
   photos?: string[];
+  /**
+   * 칸에 붙은 영상 편수. 영상은 말풍선에 그리지 않는다 — 한 편이 수 MB 라
+   * 마우스를 스칠 때마다 디코딩하면 도면이 버벅인다. 편수만 알린다.
+   */
+  videoCount?: number;
   /** 칸의 격자 좌표. */
   x: number;
   y: number;
@@ -23,10 +28,11 @@ const MAX_WIDTH = 220;
 /** 말풍선에 그리는 썸네일 수. 이보다 많으면 남은 장수만 숫자로 알린다. */
 const MAX_THUMBS = 6;
 
-/** 메모나 사진이 있는 칸에 마우스를 올리면 뜨는 읽기 전용 말풍선. */
+/** 메모나 사진 · 영상이 있는 칸에 마우스를 올리면 뜨는 읽기 전용 말풍선. */
 export function CellNoteBubble(props: CellNoteBubbleProps) {
   const { x, y, cell, cols, rows } = props;
   const photos = props.photos ?? [];
+  const videoCount = props.videoCount ?? 0;
   // 첫 장은 크게 — 대개 그 칸을 알아보려고 올린 것이다.
   // 나머지는 아래 줄에 작게 늘어놓고, 말풍선이 길어지지 않게 여섯 장에서 끊는다.
   const [first, ...rest] = photos;
@@ -79,6 +85,9 @@ export function CellNoteBubble(props: CellNoteBubbleProps) {
           ) : null}
           <p className="mt-0.5 mb-1 text-[10px] text-slate-300">사진 {photos.length}장</p>
         </>
+      ) : null}
+      {videoCount > 0 ? (
+        <p className="mb-1 text-[10px] text-sky-300">▶ 영상 {videoCount}편 — 우클릭해 재생</p>
       ) : null}
       {props.text}
     </div>

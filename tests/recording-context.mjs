@@ -155,6 +155,10 @@ export function recordingContext() {
           h: r.h,
         });
       }
+      // 선분으로 그린 다각형(영상 표시 ▶ 같은 것)은 점 목록과 색으로 남긴다.
+      if (rects.length === 0 && path.length >= 3) {
+        ops.push({ op: "fillPath", color: state.fillStyle, alpha: state.globalAlpha, points: path.map((p) => ({ ...p })) });
+      }
       rects.length = 0;
     },
     arc() {},

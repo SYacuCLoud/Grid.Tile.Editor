@@ -78,6 +78,8 @@ export function MobileViewer() {
   const [sheet, setSheet] = useState<Sheet>(null);
   const [selected, setSelected] = useState<Point | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
+  /** 화면 가득 재생 중인 영상. 닫혀 있으면 null. */
+  const [video, setVideo] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const canvas = useRef<MobileCanvasHandle | null>(null);
   /** 지금 보고 있는 리비전. 자동 갱신이 "바뀌었나" 를 여기에 대고 본다. */
@@ -374,7 +376,9 @@ export function MobileViewer() {
                   </ol>
                 ) : null}
 
-                {sheet === "cell" && summary ? <CellDetail summary={summary} onPhoto={setPhoto} /> : null}
+                {sheet === "cell" && summary ? (
+                  <CellDetail summary={summary} onPhoto={setPhoto} onVideo={setVideo} />
+                ) : null}
               </section>
             ) : null}
 
@@ -460,6 +464,25 @@ export function MobileViewer() {
           <img src={photo} alt="칸 사진" className="max-h-full max-w-full object-contain" />
         </button>
       ) : null}
+
+      {video ? (
+        // 사진과 달리 아무 곳을 눌러 닫지 않는다 — 재생 조절 단추를 누르다 닫히면 곤란하다.
+        <div className="fixed inset-0 z-50 flex flex-col bg-black/95" role="dialog" aria-label="칸 영상">
+          <div className="flex items-center justify-end px-3 py-2 [padding-top:max(0.5rem,env(safe-area-inset-top))]">
+            <button
+              type="button"
+              className="rounded-full bg-slate-800 px-4 py-1.5 text-sm text-white active:bg-slate-700"
+              onClick={() => setVideo(null)}
+            >
+              닫기
+            </button>
+          </div>
+          <div className="flex min-h-0 flex-1 items-center justify-center p-2">
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption -- 현장 기록 영상이라 자막이 없다 */}
+            <video src={video} controls autoPlay playsInline className="max-h-full max-w-full" />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -477,7 +500,11 @@ function FooterButton(props: { active?: boolean; onClick: () => void; children: 
 }
 
 /** 누른 칸의 내용. 비어 있으면 그렇다고만 적는다. */
-function CellDetail(props: { summary: ReturnType<typeof cellSummary>; onPhoto: (src: string) => void }) {
+function CellDetail(props: {
+  summary: ReturnType<typeof cellSummary>;
+  onPhoto: (src: string) => void;
+  onVideo: (src: string) => void;
+}) {
   const { summary } = props;
   if (isEmptyCell(summary)) {
     return <p className="px-4 py-4 text-sm text-slate-500">빈 칸입니다.</p>;
@@ -525,6 +552,29 @@ function CellDetail(props: { summary: ReturnType<typeof cellSummary>; onPhoto: (
               <button key={i} type="button" className="aspect-square overflow-hidden rounded-lg bg-slate-100" onClick={() => props.onPhoto(src)}>
                 {/* eslint-disable-next-line @next/next/no-img-element -- data URL 사진, 최적화 대상이 아니다 */}
                 <img src={src} alt={`사진 ${i + 1}`} className="h-full w-full object-cover" />
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {summary.videos.length > 0 ? (
+        <div>
+          <p className="mb-1 text-[11px] font-semibold text-slate-500">영상 {summary.videos.length}편</p>
+          <div className="grid grid-cols-3 gap-1.5">
+            {summary.videos.map((src, i) => (
+              <button
+                key={i}
+                type="button"
+                className="relative aspect-square overflow-hidden rounded-lg bg-slate-900"
+                onClick={() => props.onVideo(src)}
+                aria-label={`영상 ${i + 1} 재생`}
+              >
+                {/* 첫 프레임만 보인다. metadata 까지만 읽어 시트가 무거워지지 않게 한다. */}
+                <video src={src} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                <span className="absolute inset-0 flex items-center justify-center text-2xl text-white drop-shadow">
+                  ▶
+                </span>
               </button>
             ))}
           </div>

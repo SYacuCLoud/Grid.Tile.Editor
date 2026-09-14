@@ -15,6 +15,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 브라우저가 늦게 읽는 외부 라이브러리 사본(mqtt.js). npm run vendor:mqtt 로 갱신한다.
+    "public/vendor/**",
   ]),
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

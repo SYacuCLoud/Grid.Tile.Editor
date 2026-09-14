@@ -14,6 +14,19 @@ import {
 import { downloadPhoto, openPhotoLedger } from "./photoExport";
 import { entriesFromCell, ledgerSubtitle, positionText } from "./photoLedger";
 import { PhotoLightbox } from "./PhotoLightbox";
+import { downloadDataUrl } from "./storage";
+import {
+  checkVideoRoom,
+  formatSeconds,
+  MAX_CELL_VIDEOS,
+  MAX_VIDEO_SECONDS,
+  readVideoFile,
+  type ShrinkProgress,
+  videoBytes,
+  videoFileName,
+  videosBytes,
+} from "./video";
+import { VideoLightbox } from "./VideoLightbox";
 
 const PANEL_WIDTH = 240;
 
@@ -28,6 +41,8 @@ interface CellNotePopoverProps {
   initialMemo: string;
   /** 이미 붙어 있는 사진들(data URL). 없으면 빈 배열. */
   initialPhotos: string[];
+  /** 이미 붙어 있는 영상들(data URL). 없으면 빈 배열. */
+  initialVideos: string[];
   /** 사진 파일 이름과 인쇄물 머리에 적을 페이지. */
   pageId: string;
   pageName: string;
@@ -52,7 +67,7 @@ interface CellNotePopoverProps {
   onStartConnect?: () => void;
   /** 연결 하나를 지운다. */
   onRemoveConnection?: (id: string) => void;
-  onSave: (value: { label?: string; memo: string; photos: string[] }) => void;
+  onSave: (value: { label?: string; memo: string; photos: string[]; videos: string[] }) => void;
   onClose: () => void;
 }
 
@@ -69,9 +84,16 @@ export function CellNotePopover(props: CellNotePopoverProps) {
   const [dropping, setDropping] = useState(false);
   /** 확대해서 보는 사진의 순번. 닫혀 있으면 null. */
   const [zoomed, setZoomed] = useState<number | null>(null);
+  const [videos, setVideos] = useState<string[]>(props.initialVideos);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  /** 영상을 다시 굽는 중이면 그 진행. 아니면 null. 굽는 동안은 단추를 잠근다. */
+  const [shrinking, setShrinking] = useState<ShrinkProgress | null>(null);
+  /** 재생 창에 띄운 영상의 순번. 닫혀 있으면 null. */
+  const [playing, setPlaying] = useState<number | null>(null);
   const labelRef = useRef<HTMLInputElement | null>(null);
   const memoRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const videoFileRef = useRef<HTMLInputElement | null>(null);
 
   // 열린 순간 한 번만 포커스한다. 식별자부터 넣는 경우가 많다 —
   // 장치가 연결된 칸은 식별자 자리가 없으므로 메모로 간다.
@@ -88,7 +110,7 @@ export function CellNotePopover(props: CellNotePopoverProps) {
   // 확대 보기가 열려 있으면 그쪽이 Esc 를 먼저 쓴다 — 한 번의 Esc 로 확대 보기와
   // 상자가 함께 닫히면 방금 붙인 사진을 저장할 자리를 잃는다.
   const onClose = props.onClose;
-  const zoomOpen = zoomed !== null;
+  const zoomOpen = zoomed !== null || playing !== null;
   useEffect(() => {
     if (zoomOpen) return;
     const onKey = (event: KeyboardEvent) => {
@@ -110,7 +132,7 @@ export function CellNotePopover(props: CellNotePopoverProps) {
   };
 
   // 연결된 칸은 글자(label)를 넘기지 않는다 — 대장이 맡은 값을 덮지 않는다.
-  const save = () => props.onSave(props.deviceText ? { memo, photos } : { label, memo, photos });
+  const save = () => props.onSave(props.deviceText ? { memo, photos, videos } : { label, memo, photos, videos });
 
   /**
    * 상자 안 어디에 포커스가 있어도 Enter 는 저장이다.
@@ -136,8 +158,7 @@ export function CellNotePopover(props: CellNotePopoverProps) {
    * 여러 장을 한 번에 고를 수 있으므로 한 장씩 순서대로 넣고, 막힌 장이 있으면
    * 그 장만 건너뛴 뒤 이유를 한 줄로 보인다 — 한 장 때문에 나머지를 버리지 않는다.
    */
-  const attach = async (files: FileList | File[] | null | undefined) => {
-    const picked = files ? Array.from(files) : [];
+  const attachPhotos = async (picked: File[]) => {
     if (picked.length === 0) return;
 
     let next = photos;
@@ -162,6 +183,52 @@ export function CellNotePopover(props: CellNotePopoverProps) {
     setPhotoError(problems.length > 0 ? [...new Set(problems)].join(" ") : null);
   };
 
+  /**
+   * 고른 영상들을 목록에 더한다. 한도를 넘는 영상은 브라우저 안에서 다시 굽는데
+   * 영상 길이만큼 걸리므로, 그동안 진행(`n초 / 전체`)을 보이고 단추를 잠근다.
+   */
+  const attachVideos = async (picked: File[]) => {
+    if (picked.length === 0) return;
+
+    let next = videos;
+    const problems: string[] = [];
+    setVideoError(null);
+
+    for (const file of picked) {
+      try {
+        const video = await readVideoFile(file, setShrinking);
+        const blocked = checkVideoRoom(next, video);
+        if (blocked) {
+          problems.push(blocked);
+          continue;
+        }
+        next = [...next, video];
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : "영상을 붙이지 못했습니다.");
+      } finally {
+        setShrinking(null);
+      }
+    }
+
+    setVideos(next);
+    setVideoError(problems.length > 0 ? [...new Set(problems)].join(" ") : null);
+  };
+
+  /**
+   * 파일을 종류대로 나눠 붙인다. 사진 자리에 영상을 끌어다 놓아도(그 반대도)
+   * 제 자리로 간다 — 어느 단추 위에 놓았는지는 사용자가 신경 쓸 일이 아니다.
+   */
+  const attach = async (files: FileList | File[] | null | undefined) => {
+    const picked = files ? Array.from(files) : [];
+    if (picked.length === 0) return;
+    const images = picked.filter((file) => file.type.startsWith("image/"));
+    const clips = picked.filter((file) => file.type.startsWith("video/"));
+    const others = picked.length - images.length - clips.length;
+    await attachPhotos(images);
+    await attachVideos(clips);
+    if (others > 0) setVideoError((current) => [current, "그림 · 영상 파일만 붙일 수 있습니다."].filter(Boolean).join(" "));
+  };
+
   const removePhoto = (index: number) => {
     setPhotos(photos.filter((_, i) => i !== index));
     setPhotoError(null);
@@ -169,7 +236,22 @@ export function CellNotePopover(props: CellNotePopoverProps) {
     setZoomed(null);
   };
 
+  const removeVideo = (index: number) => {
+    setVideos(videos.filter((_, i) => i !== index));
+    setVideoError(null);
+    setPlaying(null);
+  };
+
   const full = photos.length >= MAX_CELL_PHOTOS;
+  const videosFull = videos.length >= MAX_CELL_VIDEOS;
+
+  /** 영상 파일 이름. 사진 이름과 같은 짜임(페이지_세로_가로_식별자_video_순번). */
+  const downloadVideo = (index: number) => {
+    const video = videos[index];
+    if (!video) return;
+    downloadDataUrl(video, videoFileName({ pageName: props.pageName, x, y, label, index: index + 1, video }));
+  };
+  const cellPosition = `가로 ${x + 1} · 세로 ${y + 1}`;
 
   /**
    * 지금 상자에 있는 값으로 사진 목록을 짓는다.
@@ -455,6 +537,121 @@ export function CellNotePopover(props: CellNotePopoverProps) {
         {photoError ? <p className="mt-1 text-[11px] text-red-700">{photoError}</p> : null}
       </div>
 
+      <div
+        className="mt-1.5"
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDropping(true);
+        }}
+        onDragLeave={() => setDropping(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDropping(false);
+          void attach(event.dataTransfer.files);
+        }}
+      >
+        <div className="flex items-baseline justify-between">
+          <p className="text-[10px] font-semibold tracking-wide text-slate-500">영상</p>
+          {videos.length > 0 ? (
+            <p className="text-[10px] text-slate-500">
+              {videos.length}/{MAX_CELL_VIDEOS}편 · 합계 {formatBytes(videosBytes(videos))}
+            </p>
+          ) : null}
+        </div>
+
+        {videos.length > 0 ? (
+          <ul className="mt-0.5 grid grid-cols-3 gap-1">
+            {videos.map((video, index) => (
+              <li key={video.slice(-24)} className="relative">
+                <button
+                  type="button"
+                  className="group block w-full cursor-pointer"
+                  onClick={() => setPlaying(index)}
+                  title={`${index + 1}번째 영상 — 클릭하여 재생`}
+                  aria-label={`${index + 1}번째 영상 재생`}
+                >
+                  {/* 첫 프레임만 보인다. metadata 까지만 읽어 상자가 무거워지지 않게 한다. */}
+                  <video
+                    src={video}
+                    muted
+                    playsInline
+                    preload="metadata"
+                    className="h-16 w-full border border-slate-300 bg-slate-900 object-cover"
+                  />
+                  <span className="absolute inset-0 flex items-center justify-center text-[15px] text-white/90 drop-shadow transition-colors group-hover:bg-slate-900/35">
+                    ▶
+                  </span>
+                </button>
+
+                <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-slate-900/70 px-0.5 text-center text-[9px] leading-tight text-white">
+                  {formatBytes(videoBytes(video))}
+                </span>
+
+                <div className="absolute top-0 right-0 flex">
+                  <button
+                    type="button"
+                    className="h-4 w-4 border border-slate-400 bg-white text-[9px] leading-none text-slate-700 hover:bg-slate-100"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      downloadVideo(index);
+                    }}
+                    title={`${index + 1}번째 영상 파일로 저장`}
+                    aria-label={`${index + 1}번째 영상 파일로 저장`}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    className="h-4 w-4 border border-slate-400 border-l-0 bg-white text-[10px] leading-none text-slate-700 hover:bg-red-50 hover:text-red-700"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      removeVideo(index);
+                    }}
+                    title={`${index + 1}번째 영상 지우기`}
+                    aria-label={`${index + 1}번째 영상 지우기`}
+                  >
+                    ×
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        <button
+          type="button"
+          className={`mt-1 h-7 w-full border border-dashed text-[12px] ${
+            dropping ? "border-slate-700 bg-slate-100 text-slate-800" : "border-slate-400 bg-white text-slate-600"
+          } hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400`}
+          onClick={() => videoFileRef.current?.click()}
+          disabled={videosFull || shrinking !== null}
+          title={
+            videosFull
+              ? `영상은 ${MAX_CELL_VIDEOS}편까지 붙일 수 있습니다.`
+              : `${formatSeconds(MAX_VIDEO_SECONDS)} 안의 영상. 큰 영상은 붙일 때 480p 로 줄입니다(영상 길이만큼 걸립니다).`
+          }
+        >
+          {shrinking
+            ? `영상 줄이는 중… ${formatSeconds(shrinking.done)} / ${formatSeconds(shrinking.total)}`
+            : videosFull
+              ? `영상 ${MAX_CELL_VIDEOS}편 (가득 찼습니다)`
+              : "+ 영상 붙이기 (끌어다 놓기 가능)"}
+        </button>
+
+        <input
+          ref={videoFileRef}
+          type="file"
+          accept="video/*"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            void attach(event.target.files);
+            event.target.value = "";
+          }}
+        />
+        {videoError ? <p className="mt-1 text-[11px] text-red-700">{videoError}</p> : null}
+      </div>
+
       <div className="mt-2 flex gap-1">
         <button type="button" className={OK_BUTTON} onClick={save}>
           저장
@@ -463,14 +660,25 @@ export function CellNotePopover(props: CellNotePopoverProps) {
           type="button"
           className={BUTTON}
           onClick={() =>
-            props.onSave(props.deviceText ? { memo: "", photos: [] } : { label: "", memo: "", photos: [] })
+            props.onSave(
+              props.deviceText
+                ? { memo: "", photos: [], videos: [] }
+                : { label: "", memo: "", photos: [], videos: [] },
+            )
           }
           disabled={
             props.deviceText
-              ? !props.initialMemo && props.initialPhotos.length === 0
-              : !props.initialLabel && !props.initialMemo && props.initialPhotos.length === 0
+              ? !props.initialMemo && props.initialPhotos.length === 0 && props.initialVideos.length === 0
+              : !props.initialLabel &&
+                !props.initialMemo &&
+                props.initialPhotos.length === 0 &&
+                props.initialVideos.length === 0
           }
-          title={props.deviceText ? "이 칸의 메모 · 사진을 지운다 (장치 연결은 남는다)" : "이 칸의 식별자 · 메모 · 사진을 지운다"}
+          title={
+            props.deviceText
+              ? "이 칸의 메모 · 사진 · 영상을 지운다 (장치 연결은 남는다)"
+              : "이 칸의 식별자 · 메모 · 사진 · 영상을 지운다"
+          }
         >
           지우기
         </button>
@@ -489,6 +697,17 @@ export function CellNotePopover(props: CellNotePopoverProps) {
           onIndex={setZoomed}
           onDownload={(index) => downloadPhoto(entries()[index])}
           onClose={() => setZoomed(null)}
+        />
+      ) : null}
+
+      {playing !== null ? (
+        <VideoLightbox
+          videos={videos}
+          index={playing}
+          caption={[label || null, props.pageName, cellPosition].filter(Boolean).join(" · ")}
+          onIndex={setPlaying}
+          onDownload={downloadVideo}
+          onClose={() => setPlaying(null)}
         />
       ) : null}
     </div>

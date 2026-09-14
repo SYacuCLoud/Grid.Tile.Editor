@@ -50,6 +50,12 @@ export interface EquipmentCell {
    */
   photos?: string[];
   /**
+   * 칸에 걸어 둔 영상들(data URL). 저울 표시가 흔들리는 모습 · 컨베이어가 걸리는
+   * 순간처럼 사진으로 남지 않는 것을 붙인다. 사진보다 훨씬 무거우므로 편수 ·
+   * 길이 · 용량을 따로 제한하고 큰 것은 붙일 때 다시 굽는다(`video.ts`).
+   */
+  videos?: string[];
+  /**
    * 사진 한 장만 담던 이전 판 필드. 새로 쓰지 않는다 —
    * 문서를 열 때 `photos` 로 옮기고 지운다(`storage.ts`).
    * @deprecated `photos` 를 쓴다.
@@ -75,6 +81,11 @@ export function cellPhotos(cell: EquipmentCell | undefined): string[] {
   if (!cell) return [];
   if (cell.photos && cell.photos.length > 0) return cell.photos;
   return cell.photo ? [cell.photo] : [];
+}
+
+/** 칸의 영상 목록. 없으면 빈 목록 — 부르는 쪽이 `undefined` 를 따로 다루지 않게. */
+export function cellVideos(cell: EquipmentCell | undefined): string[] {
+  return cell?.videos ?? [];
 }
 
 /** 사용자 레이어의 칸 내용. 레이어 ID → (칸 키 → 팔레트 ID). */
@@ -391,7 +402,13 @@ export function isInside(doc: { cols: number; rows: number }, p: Point): boolean
 
 function isEmptyEquipment(cell: EquipmentCell): boolean {
   return (
-    !cell.status && !cell.kind && !cell.label && !cell.memo && !cell.deviceId && cellPhotos(cell).length === 0
+    !cell.status &&
+    !cell.kind &&
+    !cell.label &&
+    !cell.memo &&
+    !cell.deviceId &&
+    cellPhotos(cell).length === 0 &&
+    cellVideos(cell).length === 0
   );
 }
 
@@ -503,7 +520,7 @@ export function eraseCells(doc: LayoutDoc, layer: LayerId, points: Point[]): Lay
 /** 칸 정보 편집 상자가 넘기는 값. `photo` 는 이전 판 호출부 호환용이다. */
 export type EquipmentInfoPatch = Pick<
   EquipmentCell,
-  "label" | "memo" | "photos" | "photo" | "deviceId" | "lineStyle" | "opacity"
+  "label" | "memo" | "photos" | "photo" | "videos" | "deviceId" | "lineStyle" | "opacity"
 >;
 
 export function updateEquipmentInfoOnPage(
@@ -526,6 +543,11 @@ export function updateEquipmentInfoOnPage(
   delete merged.photo;
   if (photos.length > 0) merged.photos = photos;
   else delete merged.photos;
+
+  // 영상도 같다 — patch 에 자리가 없으면 원래 칸의 영상을 그대로 둔다.
+  const videos = patch.videos !== undefined ? patch.videos : cellVideos(page.equipment[key]);
+  if (videos.length > 0) merged.videos = videos;
+  else delete merged.videos;
 
   const equipment = { ...page.equipment };
   if (isEmptyEquipment(merged)) delete equipment[key];

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { CellNoteBubble } from "./CellNoteBubble";
-import { cellKey, cellPhotos, type LayoutDoc, type Point } from "./doc";
+import { cellKey, cellPhotos, cellVideos, type LayoutDoc, type Point } from "./doc";
 import { type LayerId, type PaletteItem } from "./palette";
 import { type CellRange } from "./range";
 import { canvasCells, renderDoc, type RenderOptions } from "./render";
@@ -118,6 +118,7 @@ export function GridCanvas(props: GridCanvasProps) {
   const hoverCell = hover ? doc.equipment[cellKey(hover.x, hover.y)] : undefined;
   const hoverMemo = hoverCell?.memo;
   const hoverPhotos = cellPhotos(hoverCell);
+  const hoverVideos = cellVideos(hoverCell);
 
   return (
     <div className="relative inline-block">
@@ -147,12 +148,13 @@ export function GridCanvas(props: GridCanvasProps) {
         }}
       />
 
-      {hover && (hoverMemo || hoverPhotos.length > 0) && !props.noteOpen ? (
+      {hover && (hoverMemo || hoverPhotos.length > 0 || hoverVideos.length > 0) && !props.noteOpen ? (
         // cols/rows 는 도면이 아니라 캔버스 칸 수다 — 인쇄 경계선을 켜면 캔버스가
         // 용지까지 넓어지고, 말풍선은 그 끝에서 right/bottom 을 잰다.
         <CellNoteBubble
           text={hoverMemo ?? ""}
           photos={hoverPhotos}
+          videoCount={hoverVideos.length}
           x={hover.x}
           y={hover.y}
           cell={cell}

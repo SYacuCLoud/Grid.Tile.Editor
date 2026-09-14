@@ -58,7 +58,9 @@
           "kind": "reader",
           "label": "C1101",         // 식별자
           "memo": "3월 점검 대상",
-          "deviceId": "dev-1"       // 장치 대장 참조 (선택)
+          "deviceId": "dev-1",      // 장치 대장 참조 (선택)
+          "photos": ["data:image/webp;base64,…"],  // 최대 8장 · 720p 급 (선택)
+          "videos": ["data:video/webm;base64,…"]   // 최대 3편 · 한 편 약 12MB 안 (선택)
         }
       },
       "wiring": { "8,9": "wirePurple" },

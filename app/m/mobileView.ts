@@ -6,7 +6,7 @@
  * 캔버스 컴포넌트는 손가락 이벤트만 받아 이 함수들로 넘긴다.
  */
 
-import { cellKey, cellPhotos, type PageDoc, type Point, type ProjectDoc } from "../editor/doc";
+import { cellKey, cellPhotos, cellVideos, type PageDoc, type Point, type ProjectDoc } from "../editor/doc";
 import { type Device, deviceById } from "../editor/device";
 import { layerById } from "../editor/layers";
 import type { PaletteItem } from "../editor/palette";
@@ -96,6 +96,7 @@ export interface CellSummary {
   label?: string;
   memo?: string;
   photos: string[];
+  videos: string[];
   /** 이 칸을 품은 구역 이름들. 겹치면 여럿이다. */
   zones: string[];
   /** 칸에 칠해진 팔레트 항목. 레이어 이름과 함께. */
@@ -130,6 +131,7 @@ export function cellSummary(project: ProjectDoc, page: PageDoc, x: number, y: nu
     ...(cell?.label ? { label: cell.label } : {}),
     ...(cell?.memo ? { memo: cell.memo } : {}),
     photos: cellPhotos(cell),
+    videos: cellVideos(cell),
     zones: zonesAt(page.zones, x, y).map((zone) => zone.name),
     items,
     ...(device ? { device } : {}),
@@ -142,6 +144,7 @@ export function isEmptyCell(summary: CellSummary): boolean {
     !summary.label &&
     !summary.memo &&
     summary.photos.length === 0 &&
+    summary.videos.length === 0 &&
     summary.zones.length === 0 &&
     summary.items.length === 0 &&
     !summary.device

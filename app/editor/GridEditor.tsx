@@ -8,7 +8,7 @@ import { ConnectionOverlay } from "./ConnectionOverlay";
 import { deviceById, deviceLabel } from "./device";
 import { DevicePanel } from "./DevicePanel";
 import { legendBand, sheetCells } from "./paper";
-import { cellKey, cellPhotos, parseCellKey } from "./doc";
+import { cellKey, cellPhotos, cellVideos, parseCellKey } from "./doc";
 import { GridCanvas } from "./GridCanvas";
 import { InspectorPanel } from "./InspectorPanel";
 import { PaperModal } from "./PaperModal";
@@ -374,6 +374,7 @@ export function GridEditor() {
         label: state.doc.equipment[state.noteKey]?.label ?? "",
         memo: state.doc.equipment[state.noteKey]?.memo ?? "",
         photos: cellPhotos(state.doc.equipment[state.noteKey]),
+        videos: cellVideos(state.doc.equipment[state.noteKey]),
       }
     : null;
 
@@ -565,6 +566,11 @@ export function GridEditor() {
         onDownloadPhotos={downloadAllPhotos}
         deviceCount={state.project.devices?.length ?? 0}
         onOpenDevices={() => setDevicePanel({})}
+        liveHref={
+          server.currentId
+            ? `/live?id=${encodeURIComponent(server.currentId)}&page=${encodeURIComponent(state.project.activePageId)}`
+            : "/live"
+        }
         onLoadSample={actions.loadSample}
         onReset={resetAll}
       />
@@ -731,6 +737,7 @@ export function GridEditor() {
                 initialLabel={noteCell.label}
                 initialMemo={noteCell.memo}
                 initialPhotos={noteCell.photos}
+                initialVideos={noteCell.videos}
                 pageId={state.project.activePageId}
                 pageName={state.activePageDoc.name}
                 caption={noteCaption}

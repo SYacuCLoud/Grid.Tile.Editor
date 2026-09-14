@@ -620,18 +620,19 @@ export function useEditor() {
 
 
   /**
-   * 장비 ID · 메모 · 사진을 함께 바꾼다. 같은 칸의 상태·장비는 건드리지 않는다.
+   * 장비 ID · 메모 · 사진 · 영상을 함께 바꾼다. 같은 칸의 상태·장비는 건드리지 않는다.
    * label 이 없는 호출은 글자를 그대로 둔다 — 장치가 연결된 칸의 글자는 대장이
    * 맡으므로 메모 상자가 건드리지 않는다.
    */
   const saveNote = useCallback(
-    (key: string, value: { label?: string; memo: string; photos?: string[] }) => {
+    (key: string, value: { label?: string; memo: string; photos?: string[]; videos?: string[] }) => {
       applyEdit((current) =>
         updateActivePage(current, (page) =>
           updateEquipmentInfoOnPage(page, key, {
             ...(value.label !== undefined ? { label: value.label.trim() } : {}),
             memo: value.memo,
             photos: value.photos ?? [],
+            videos: value.videos ?? [],
           }),
         ),
       );
