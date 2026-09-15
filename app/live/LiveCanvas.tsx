@@ -5,7 +5,7 @@ import type { LayoutDoc } from "../editor/doc";
 import type { LayerId } from "../editor/palette";
 import { renderDoc } from "../editor/render";
 import { fitCell, MAX_CANVAS_PX } from "../m/mobileView";
-import { type Flash, flashAlpha, LIVE_COLORS, type PlacedReader, readerPaint } from "./liveState";
+import { fitLabel, type Flash, flashAlpha, LIVE_COLORS, type PlacedReader, readerPaint, shortUid } from "./liveState";
 
 interface LiveCanvasProps {
   doc: LayoutDoc;
@@ -14,6 +14,8 @@ interface LiveCanvasProps {
   flashes: Record<string, Flash>;
   /** 잔상 계산 기준 시각. 부모가 틱마다 올려 준다. */
   now: number;
+  /** 리더 id → 칸에 적을 실물 이름. 기준정보에서 찾은 것만 들어 있다. */
+  labels?: Record<string, string>;
 }
 
 /**
@@ -25,7 +27,7 @@ interface LiveCanvasProps {
  * 다시 그려야 한다.
  */
 export function LiveCanvas(props: LiveCanvasProps) {
-  const { doc, visible, placed, flashes, now } = props;
+  const { doc, visible, placed, flashes, now, labels } = props;
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const baseRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
@@ -73,8 +75,8 @@ export function LiveCanvas(props: LiveCanvasProps) {
     if (!ctx) return;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, canvasW, canvasH);
-    drawOverlay(ctx, cell, placed, flashes, now);
-  }, [canvasH, canvasW, cell, flashes, now, placed, ratio]);
+    drawOverlay(ctx, cell, placed, flashes, now, labels);
+  }, [canvasH, canvasW, cell, flashes, labels, now, placed, ratio]);
 
   return (
     <div ref={wrapRef} className="relative h-full w-full">
@@ -86,19 +88,34 @@ export function LiveCanvas(props: LiveCanvasProps) {
   );
 }
 
-/** 리더가 놓인 칸마다 상태 색과 UID, 방금 일어난 이벤트의 잔상을 얹는다. */
+/**
+ * 리더가 놓인 칸마다 상태 색과 실물 이름(또는 UID), 방금 일어난 이벤트의 잔상을 얹는다.
+ *
+ * 글자는 칸마다 찍지 않고 그 리더의 칸들을 감싸는 네모 한가운데에 한 번 찍는다 — 한 장치가
+ * 여러 칸에 걸쳐 있으면 그만큼 넓게 쓸 수 있다. 이름이 그 폭에 안 들어가면 글자를 줄이고,
+ * 그래도 안 되면 짧은 UID 로 물러난다. 벽걸이 화면에서 잘린 글자는 없는 것보다 나쁘다.
+ */
 export function drawOverlay(
   ctx: CanvasRenderingContext2D,
   cell: number,
   placed: PlacedReader[],
   flashes: Record<string, Flash>,
   now: number,
+  labels?: Record<string, string>,
 ) {
   for (const { reader, cells } of placed) {
-    const paint = readerPaint(reader);
+    const paint = readerPaint(reader, labels?.[reader.id]);
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
     for (const point of cells) {
       const px = point.x * cell;
       const py = point.y * cell;
+      minX = Math.min(minX, px);
+      minY = Math.min(minY, py);
+      maxX = Math.max(maxX, px + cell);
+      maxY = Math.max(maxY, py + cell);
 
       if (paint.fill) {
         ctx.globalAlpha = paint.fillAlpha;
@@ -112,19 +129,24 @@ export function drawOverlay(
       const inset = paint.strokeWidth / 2;
       ctx.strokeRect(px + inset, py + inset, cell - paint.strokeWidth, cell - paint.strokeWidth);
       ctx.setLineDash([]);
+    }
 
-      if (paint.text && cell >= 14) {
-        const fontSize = Math.max(7, Math.min(cell * 0.34, 18));
-        ctx.font = `700 ${fontSize}px ui-monospace, Consolas, monospace`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.lineWidth = Math.max(2, fontSize * 0.28);
-        ctx.strokeStyle = "rgba(15, 23, 42, 0.85)";
-        ctx.lineJoin = "round";
-        ctx.strokeText(paint.text, px + cell / 2, py + cell / 2);
+    if (paint.text && cell >= 14 && cells.length > 0) {
+      const box = fitLabel(ctx, paint.text, shortUid(reader.uid), maxX - minX - 4, maxY - minY - 4, cell);
+      ctx.font = box.font;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineWidth = Math.max(2, box.fontSize * 0.28);
+      ctx.strokeStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.lineJoin = "round";
+      const cx = (minX + maxX) / 2;
+      const top = (minY + maxY) / 2 - ((box.lines.length - 1) * box.lineHeight) / 2;
+      box.lines.forEach((line, index) => {
+        const cy = top + index * box.lineHeight;
+        ctx.strokeText(line, cx, cy);
         ctx.fillStyle = "#ffffff";
-        ctx.fillText(paint.text, px + cell / 2, py + cell / 2);
-      }
+        ctx.fillText(line, cx, cy);
+      });
     }
 
     // 잔상 — 칸 둘레에서 바깥으로 퍼지며 옅어지는 테.

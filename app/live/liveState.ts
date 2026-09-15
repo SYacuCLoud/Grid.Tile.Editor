@@ -16,6 +16,19 @@
  */
 
 import { type PageDoc, type Point, type ProjectDoc, parseCellKey } from "../editor/doc";
+import {
+  type EventField,
+  type FormatBook,
+  formatFor,
+  getPath,
+  readBool,
+  readInt,
+  readKind,
+  readString,
+  readTime,
+  type StateField,
+  type StatusField,
+} from "./messageFormat";
 
 /** 리더 한 대의 지금. `…/state` 페이로드 그대로에 토픽에서 읽은 자리를 붙인 것. */
 export interface ReaderState {
@@ -66,6 +79,7 @@ export interface LiveEvent {
   site: string;
   key: string;
   reader: string;
+  serial: string;
   uid: string;
   dwellMs: number | null;
   host: string;
@@ -86,9 +100,17 @@ export interface LiveModel {
   flashes: Record<string, Flash>;
   /** 받은 메시지 수. 연결이 살아 있는지 눈으로 보는 용도. */
   received: number;
+  /** 사업장별로 마지막에 받은 원문 페이로드. 형식 프로필 설정 화면이 "실제 메시지" 로 경로를 고르게 한다. */
+  samples: Record<string, SiteSamples>;
 }
 
-export const EMPTY_LIVE: LiveModel = { readers: {}, hosts: {}, events: [], flashes: {}, received: 0 };
+export interface SiteSamples {
+  state?: string;
+  event?: string;
+  status?: string;
+}
+
+export const EMPTY_LIVE: LiveModel = { readers: {}, hosts: {}, events: [], flashes: {}, received: 0, samples: {} };
 
 /** 화면에 남기는 이벤트 수. 현황판은 "지금" 이 먼저라 길게 두지 않는다. */
 export const MAX_EVENTS = 60;
@@ -120,13 +142,19 @@ export function readerId(site: string, key: string): string {
 /**
  * 메시지 하나를 모델에 반영한 새 모델을 돌려준다.
  *
+ * 페이로드는 사업장의 형식 프로필(`book`)로 읽는다. 프로필이 없으면 v1(경로 = 필드 이름).
  * retained 토픽에 빈 페이로드가 오면 "지웠다" 는 뜻이라 그 항목을 뺀다.
  * 해석할 수 없는 페이로드는 조용히 무시한다 — 현황판이 한 메시지 때문에 죽으면 안 된다.
  */
-export function applyMessage(model: LiveModel, topic: string, payload: string, now: number): LiveModel {
+export function applyMessage(model: LiveModel, topic: string, payload: string, now: number, book?: FormatBook | null): LiveModel {
   const parsed = parseTopic(topic);
   if (!parsed) return model;
   const received = model.received + 1;
+  const fmt = formatFor(book, parsed.site);
+  const rules = fmt.values;
+  // 원문 표본. 형식 설정 화면이 "실제로 오는 메시지" 를 보여 주며 경로를 고르게 한다.
+  const samples: Record<string, SiteSamples> =
+    payload.trim() === "" ? model.samples : { ...model.samples, [parsed.site]: { ...model.samples[parsed.site], [parsed.kind]: payload } };
 
   if (parsed.kind === "status") {
     const id = readerId(parsed.site, parsed.host);
@@ -137,22 +165,23 @@ export function applyMessage(model: LiveModel, topic: string, payload: string, n
       return { ...model, hosts, received };
     }
     const json = parseJson(payload);
-    if (!json) return { ...model, received };
+    if (!json) return { ...model, received, samples };
+    const g = (field: StatusField) => getPath(json, fmt.status[field]);
     const status: HostStatus = {
       id,
       site: parsed.site,
-      host: str(json.host) || parsed.host,
-      online: bool(json.online),
-      time: str(json.time) || null,
-      version: str(json.version),
-      readerCount: int(json.readerCount),
-      onlineReaders: int(json.onlineReaders),
-      presentReaders: int(json.presentReaders),
-      appearToday: int(json.appearToday),
-      removeToday: int(json.removeToday),
+      host: readString(g("host")) || parsed.host,
+      online: readBool(g("online"), rules),
+      time: readTime(g("time"), rules) || null,
+      version: readString(g("version")),
+      readerCount: readInt(g("readerCount")),
+      onlineReaders: readInt(g("onlineReaders")),
+      presentReaders: readInt(g("presentReaders")),
+      appearToday: readInt(g("appearToday")),
+      removeToday: readInt(g("removeToday")),
       receivedAt: now,
     };
-    return { ...model, hosts: { ...model.hosts, [id]: status }, received };
+    return { ...model, hosts: { ...model.hosts, [id]: status }, received, samples };
   }
 
   const id = readerId(parsed.site, parsed.key);
@@ -165,33 +194,38 @@ export function applyMessage(model: LiveModel, topic: string, payload: string, n
       return { ...model, readers, received };
     }
     const json = parseJson(payload);
-    if (!json) return { ...model, received };
+    if (!json) return { ...model, received, samples };
+    const g = (field: StateField) => getPath(json, fmt.state[field]);
+    const onlineRaw = g("online");
     const reader: ReaderState = {
       id,
       site: parsed.site,
       key: parsed.key,
-      host: str(json.host),
-      reader: str(json.reader) || str(json.alias) || str(json.readerName) || parsed.key,
-      alias: str(json.alias),
-      readerName: str(json.readerName),
-      serial: str(json.serial),
-      present: bool(json.present),
-      online: json.online === undefined ? true : bool(json.online),
-      uid: str(json.uid),
-      tech: str(json.tech),
-      state: str(json.state),
+      host: readString(g("host")),
+      reader: readString(g("reader")) || readString(g("alias")) || readString(g("readerName")) || parsed.key,
+      alias: readString(g("alias")),
+      readerName: readString(g("readerName")),
+      serial: readString(g("serial")),
+      present: readBool(g("present"), rules),
+      // online 이 없는 발행자는 살아 있는 것으로 본다.
+      online: onlineRaw === undefined ? true : readBool(onlineRaw, rules),
+      uid: readString(g("uid")),
+      tech: readString(g("tech")),
+      state: readString(g("state")),
       // v1 은 `time`. 스키마 확정 전 시험판이 `at` 으로 냈으므로 그것도 받는다.
-      at: str(json.time) || str(json.at),
+      at: readTime(g("time"), rules) || readTime(json.at, rules),
       receivedAt: now,
     };
-    return { ...model, readers: { ...model.readers, [id]: reader }, received };
+    return { ...model, readers: { ...model.readers, [id]: reader }, received, samples };
   }
 
   // event
   const json = parseJson(payload);
-  if (!json) return { ...model, received };
-  const kind: LiveEventKind = str(json.kind) === "REMOVE" ? "REMOVE" : "APPEAR";
-  const time = str(json.time);
+  if (!json) return { ...model, received, samples };
+  const g = (field: EventField) => getPath(json, fmt.event[field]);
+  const kind: LiveEventKind = readKind(g("kind"), rules);
+  const time = readTime(g("time"), rules);
+  const dwellRaw = g("dwellMs");
   const event: LiveEvent = {
     id: `${time}|${id}|${kind}`,
     time,
@@ -199,16 +233,17 @@ export function applyMessage(model: LiveModel, topic: string, payload: string, n
     readerId: id,
     site: parsed.site,
     key: parsed.key,
-    reader: str(json.reader) || str(json.alias) || str(json.readerName) || parsed.key,
-    uid: str(json.uid),
-    dwellMs: typeof json.dwellMs === "number" ? json.dwellMs : null,
-    host: str(json.host),
+    reader: readString(g("reader")) || readString(g("alias")) || readString(g("readerName")) || parsed.key,
+    serial: readString(g("serial")),
+    uid: readString(g("uid")),
+    dwellMs: dwellRaw === undefined || dwellRaw === null || dwellRaw === "" ? null : readInt(dwellRaw),
+    host: readString(g("host")),
     receivedAt: now,
   };
   // 같은 이벤트가 두 번 오면(QoS 1 재전송) 한 번만 남긴다.
-  if (model.events.some((e) => e.id === event.id)) return { ...model, received };
+  if (model.events.some((e) => e.id === event.id)) return { ...model, received, samples };
   const events = [event, ...model.events].slice(0, MAX_EVENTS);
-  return { ...model, events, flashes: { ...model.flashes, [id]: { kind, at: now } }, received };
+  return { ...model, events, flashes: { ...model.flashes, [id]: { kind, at: now } }, received, samples };
 }
 
 /** 잔상의 남은 진하기(1 → 0). 끝났으면 0. */
@@ -334,15 +369,107 @@ export interface ReaderPaint {
   text: string;
 }
 
-/** 리더 상태 → 칸을 어떻게 그릴지. */
-export function readerPaint(reader: ReaderState): ReaderPaint {
+/**
+ * 리더 상태 → 칸을 어떻게 그릴지.
+ * `label` 을 주면 칸 글자로 그것을 쓴다(기준정보에서 찾은 실물 이름). 없으면 짧은 UID.
+ */
+export function readerPaint(reader: ReaderState, label?: string): ReaderPaint {
   if (!reader.online) {
     return { fill: LIVE_COLORS.offline, fillAlpha: 0.35, stroke: LIVE_COLORS.offline, strokeWidth: 1.5, dashed: true, text: "" };
   }
   if (reader.present) {
-    return { fill: LIVE_COLORS.present, fillAlpha: 0.45, stroke: LIVE_COLORS.present, strokeWidth: 2, dashed: false, text: shortUid(reader.uid) };
+    return { fill: LIVE_COLORS.present, fillAlpha: 0.45, stroke: LIVE_COLORS.present, strokeWidth: 2, dashed: false, text: label || shortUid(reader.uid) };
   }
   return { fill: null, fillAlpha: 0, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: "" };
+}
+
+// ------------------------------------------------------------ 칸 글자 맞추기
+
+const LABEL_FONT = "system-ui, 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+const UID_FONT = "ui-monospace, Consolas, monospace";
+export const MIN_LABEL_FONT = 7;
+const LINE_HEIGHT = 1.15;
+const MAX_LABEL_LINES = 3;
+
+export interface FittedLabel {
+  lines: string[];
+  font: string;
+  fontSize: number;
+  lineHeight: number;
+}
+
+type MeasureContext = Pick<CanvasRenderingContext2D, "measureText"> & { font: string };
+
+/**
+ * 실물 이름을 칸(들)의 폭 · 높이에 맞춘다.
+ *
+ * 한 줄로 안 들어가면 글자를 줄이고, 그래도 안 되면 띄어쓰기 자리에서 줄을 나누고(`통번호` / `129`),
+ * 낱말 하나가 너무 길면 글자 단위로 자른다. 그래도 안 되면 짧은 UID 로 물러난다.
+ * 벽걸이 화면에서 잘린 글자는 없는 것보다 나쁘다.
+ */
+export function fitLabel(ctx: MeasureContext, label: string, fallback: string, maxWidth: number, maxHeight: number, cell: number): FittedLabel {
+  const base = Math.max(MIN_LABEL_FONT, Math.min(cell * 0.34, 18));
+  const fits = (text: string, size: number, family: string) => {
+    ctx.font = `700 ${size}px ${family}`;
+    return ctx.measureText(text).width <= maxWidth;
+  };
+  const make = (lines: string[], size: number, family: string): FittedLabel => ({ lines, font: `700 ${size}px ${family}`, fontSize: size, lineHeight: size * LINE_HEIGHT });
+
+  if (label && label !== fallback) {
+    // 1) 한 줄, 글자 줄이기.
+    for (let size = base; size >= MIN_LABEL_FONT; size -= 1) {
+      if (fits(label, size, LABEL_FONT)) return make([label], size, LABEL_FONT);
+    }
+    // 2) 여러 줄. 큰 글자부터 시도해 들어가는 첫 크기를 쓴다.
+    for (let size = base; size >= MIN_LABEL_FONT; size -= 1) {
+      const maxLines = Math.min(MAX_LABEL_LINES, Math.floor(maxHeight / (size * LINE_HEIGHT)));
+      if (maxLines < 2) continue;
+      const lines = wrapLabel(label, maxLines, (text) => fits(text, size, LABEL_FONT));
+      if (lines) return make(lines, size, LABEL_FONT);
+    }
+  }
+  // 3) 짧은 UID.
+  for (let size = base; size >= MIN_LABEL_FONT; size -= 1) {
+    if (fits(fallback, size, UID_FONT)) return make([fallback], size, UID_FONT);
+  }
+  return make([fallback], MIN_LABEL_FONT, UID_FONT);
+}
+
+/** 띄어쓰기 자리에서 줄을 나눈다. 한 낱말이 폭을 넘으면 글자로 자른다. 줄 수를 넘으면 null. */
+export function wrapLabel(label: string, maxLines: number, fits: (text: string) => boolean): string[] | null {
+  const words = label.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+  const push = (line: string) => {
+    if (line) lines.push(line);
+  };
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (fits(candidate)) {
+      current = candidate;
+      continue;
+    }
+    push(current);
+    current = "";
+    if (fits(word)) {
+      current = word;
+      continue;
+    }
+    // 낱말이 너무 길다 — 글자로 자른다.
+    let piece = "";
+    for (const ch of word) {
+      if (fits(piece + ch)) piece += ch;
+      else {
+        if (!piece) return null; // 글자 하나도 안 들어간다.
+        push(piece);
+        piece = ch;
+      }
+    }
+    current = piece;
+  }
+  push(current);
+  if (lines.length === 0 || lines.length > maxLines) return null;
+  return lines;
 }
 
 /** 칸에 적을 만큼 짧은 UID. 끝 6자리면 한 현장 안에서는 갈린다. */
@@ -396,17 +523,3 @@ function parseJson(payload: string): Record<string, unknown> | null {
   }
 }
 
-function str(value: unknown): string {
-  return typeof value === "string" ? value : value === undefined || value === null ? "" : String(value);
-}
-
-function bool(value: unknown): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  if (typeof value === "string") return value === "true" || value === "1";
-  return false;
-}
-
-function int(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : 0;
-}

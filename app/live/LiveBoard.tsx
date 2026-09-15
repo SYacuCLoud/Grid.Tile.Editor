@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { MqttClient } from "mqtt";
 import { CONNECTION_LAYER_ID } from "../editor/connection";
 import { activeLayoutDoc, activePage, type ProjectDoc } from "../editor/doc";
@@ -21,12 +21,21 @@ import {
   matchReaders,
   pruneFlashes,
   readerPaint,
+  type ReaderState,
   subscriptionTopics,
 } from "./liveState";
+import { type LookupBook, type LookupSnapshot, pickSnapshot, resolveTag, tagLine } from "./lookup";
+import { loadFormatBook } from "./formatClient";
+import { FormatSettings } from "./FormatSettings";
+import { loadLookupBook, loadLookupConfig, type PublicLookupConfig, refreshLookup } from "./lookupClient";
+import { LookupSettings } from "./LookupSettings";
+import { type FormatBook, formatFor, isDefaultFormat, type MessageFormat } from "./messageFormat";
 import { loadMqtt } from "./mqttLoader";
 
 /** 서버 도면을 다시 확인하는 간격. 편집기에서 칸을 옮기면 현황판도 따라와야 한다. */
 const REFRESH_MS = 30_000;
+/** 기준정보 스냅샷을 서버에서 다시 받는 간격. 서버가 DB 를 읽는 주기는 설정(refreshSeconds)이 따로 정한다. */
+const LOOKUP_MS = 60_000;
 
 type Connection = "loading" | "connecting" | "connected" | "reconnecting" | "error";
 
@@ -130,6 +139,20 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
   const [connection, setConnection] = useState<Connection>("loading");
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [book, setBook] = useState<LookupBook | null>(null);
+  const [bookError, setBookError] = useState<string | null>(null);
+  const [lookupBusy, setLookupBusy] = useState(false);
+  /** 설정 창. 사업장 이름과 (있으면) 지금 설정. */
+  const [settings, setSettings] = useState<{ site: string; initial: PublicLookupConfig | null } | null>(null);
+  /** 메시지 형식 프로필. 없으면 기본(v1). MQTT 콜백이 최신 것을 보도록 ref 로도 든다. */
+  const [formats, setFormats] = useState<FormatBook | null>(null);
+  const formatsRef = useRef<FormatBook | null>(null);
+  useEffect(() => {
+    formatsRef.current = formats;
+  }, [formats]);
+  const [formatOpen, setFormatOpen] = useState(false);
+  /** 프로필을 저장하면 브로커에 다시 붙어 retained 를 새 프로필로 다시 읽는다. */
+  const [reconnectNonce, setReconnectNonce] = useState(0);
   const revisionRef = useRef(-1);
 
   const brokerUrl = loc.broker ?? (typeof window === "undefined" ? "" : defaultBrokerUrl(window.location.hostname));
@@ -191,6 +214,79 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
     return () => window.clearInterval(timer);
   }, [opened?.id, opened]);
 
+  // ---- 기준정보(UID → 실물) ----
+  // 서버가 DB 에서 읽어 둔 스냅샷을 받는다. 없거나 실패해도 현황판은 UID 로 계속 돈다.
+  useEffect(() => {
+    let cancelled = false;
+    const pull = () => {
+      loadLookupBook()
+        .then((r) => {
+          if (cancelled) return;
+          setBook({ sites: r.sites });
+          setBookError(null);
+        })
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          setBookError(e instanceof Error ? e.message : String(e));
+        });
+    };
+    pull();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") pull();
+    }, LOOKUP_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const refreshBook = (site: string) => {
+    setLookupBusy(true);
+    refreshLookup(site)
+      .then((snapshot) => {
+        setBook((cur) => ({ sites: { ...(cur?.sites ?? {}), [snapshot.site]: snapshot } }));
+        setBookError(null);
+      })
+      .catch((e: unknown) => setBookError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLookupBusy(false));
+  };
+
+  // ---- 메시지 형식 프로필 ----
+  useEffect(() => {
+    let cancelled = false;
+    const pull = () => {
+      loadFormatBook()
+        .then((r) => {
+          if (!cancelled) setFormats({ sites: r.sites });
+        })
+        .catch(() => {
+          // 서버가 없으면 기본(v1)으로 계속 돈다.
+        });
+    };
+    pull();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") pull();
+    }, LOOKUP_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const formatSite = loc.site || "default";
+  const activeFormat: MessageFormat = formatFor(formats, formatSite);
+  const formatIsDefault = isDefaultFormat(activeFormat);
+
+  const openSettings = (site: string, exists: boolean) => {
+    if (!exists) {
+      setSettings({ site, initial: null });
+      return;
+    }
+    loadLookupConfig(site)
+      .then((r) => setSettings({ site, initial: r.config }))
+      .catch((e: unknown) => setBookError(e instanceof Error ? e.message : String(e)));
+  };
+
   // ---- MQTT ----
   useEffect(() => {
     if (!brokerUrl) return;
@@ -224,7 +320,8 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
         });
         client.on("message", (topic, payload) => {
           const at = Date.now();
-          setModel((m) => applyMessage(m, topic, payload.toString(), at));
+          const book = formatsRef.current;
+          setModel((m) => applyMessage(m, topic, payload.toString(), at, book));
         });
       })
       .catch((e: unknown) => {
@@ -237,7 +334,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
       cancelled = true;
       client?.end(true);
     };
-  }, [brokerUrl, loc.prefix, loc.site]);
+  }, [brokerUrl, loc.prefix, loc.site, reconnectNonce]);
 
   // ---- 시계 · 잔상 ----
   // 잔상이 살아 있으면 빠르게, 아니면 1초에 한 번 — "n초 전" 과 시계만 움직인다.
@@ -271,6 +368,36 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
   const hosts = useMemo(() => Object.values(model.hosts).sort((a, b) => a.host.localeCompare(b.host)), [model.hosts]);
   const presentCount = match.placed.filter((p) => p.reader.present).length;
   const offlineCount = readers.filter((r) => !r.online).length;
+
+  // 리더의 사업장에 맞는 스냅샷. 사업장을 안 정한 화면(`site=`)은 리더마다 다를 수 있다.
+  const snapshotFor = useCallback((site: string): LookupSnapshot | null => pickSnapshot(book, site), [book]);
+  /** 이 리더에 이름을 붙일 차례인가. 키가 태그 UID 면 태그가 놓여 있을 때만, 리더 S/N 같은 다른 필드면 언제나. */
+  const hasSubject = useCallback(
+    (reader: ReaderState) => {
+      const snapshot = snapshotFor(reader.site);
+      if (!snapshot) return false;
+      if ((snapshot.key.field || "uid") === "uid") return reader.present && reader.uid !== "";
+      return reader.online;
+    },
+    [snapshotFor],
+  );
+  // 칸에 적을 실물 이름. 찾은 것만 넣고, 나머지는 캔버스가 짧은 UID 로 그린다.
+  const { labels, unknownTags } = useMemo(() => {
+    const labels: Record<string, string> = {};
+    let unknownTags = 0;
+    for (const reader of readers) {
+      if (!hasSubject(reader)) continue;
+      const tag = resolveTag(snapshotFor(reader.site), reader as unknown as Record<string, unknown>);
+      if (tag) labels[reader.id] = tag.title;
+      else unknownTags += 1;
+    }
+    return { labels, unknownTags };
+  }, [hasSubject, readers, snapshotFor]);
+  const lookupSnapshots = useMemo(() => {
+    const sites = book ? Object.values(book.sites) : [];
+    if (loc.site) return sites.filter((s) => s.site === loc.site);
+    return sites.sort((a, b) => a.site.localeCompare(b.site));
+  }, [book, loc.site]);
 
   const switchPage = (id: string) => {
     setPageId(id);
@@ -370,6 +497,14 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
         <div className="flex shrink-0 items-center gap-2 text-xs" title={`${brokerUrl} · 받은 메시지 ${model.received}`}>
           <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: conn.color }} aria-hidden="true" />
           <span className="text-slate-300">{conn.text}</span>
+          <button
+            type="button"
+            className={`rounded px-1.5 py-0.5 text-[11px] hover:bg-slate-800 ${formatIsDefault ? "text-slate-400" : "text-sky-300"}`}
+            onClick={() => setFormatOpen(true)}
+            title="페이로드 JSON 의 어느 경로를 읽을지(메시지 형식 프로필). 기본은 RfidReaderMonitor v1."
+          >
+            형식 {formatIsDefault ? "v1" : "사용자 정의"}
+          </button>
         </div>
         <time className="shrink-0 font-mono text-lg tabular-nums text-slate-200" dateTime={new Date(now).toISOString()}>
           {new Date(now).toLocaleTimeString("ko-KR", { hour12: false })}
@@ -379,7 +514,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
       <div className="flex min-h-0 flex-1">
         <main className="relative min-w-0 flex-1 p-2">
           {doc ? (
-            <LiveCanvas key={`${opened?.id}:${page?.id}`} doc={doc} visible={visible} placed={match.placed} flashes={model.flashes} now={now} />
+            <LiveCanvas key={`${opened?.id}:${page?.id}`} doc={doc} visible={visible} placed={match.placed} flashes={model.flashes} now={now} labels={labels} />
           ) : (
             <p className="p-4 text-sm text-slate-400">{openError ?? "도면 읽는 중…"}</p>
           )}
@@ -395,6 +530,54 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
             <Stat label="태그 감지" value={presentCount} color={LIVE_COLORS.present} />
             <Stat label="배치된 리더" value={match.placed.length} color={LIVE_COLORS.empty} />
             <Stat label="오프라인" value={offlineCount} color={offlineCount > 0 ? LIVE_COLORS.remove : LIVE_COLORS.offline} />
+          </section>
+
+          <section>
+            <h2 className="mb-1 text-[11px] font-semibold tracking-wide text-slate-400">기준정보 (UID → 실물)</h2>
+            {bookError && lookupSnapshots.length === 0 ? <p className="text-xs text-amber-300">{bookError}</p> : null}
+            {!bookError && book && lookupSnapshots.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                조회 설정이 없습니다. 회사 자료(SQL Server 표)의 UID 열을 이어 두면 칸에 UID 대신 실물 이름이 보입니다.{" "}
+                <button type="button" className="rounded px-1.5 py-0.5 text-sky-300 hover:bg-slate-800" onClick={() => openSettings(loc.site || "default", false)}>
+                  설정 만들기
+                </button>
+              </p>
+            ) : null}
+            <ul className="flex flex-col gap-1">
+              {lookupSnapshots.map((s) => (
+                <li key={s.site} className="rounded-lg bg-slate-800/70 px-2.5 py-1.5">
+                  <span className="flex items-center gap-2">
+                    <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.ok ? LIVE_COLORS.present : s.rowCount > 0 ? LIVE_COLORS.remove : LIVE_COLORS.offline }} aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate font-semibold" title={s.table}>
+                      {s.table.split(".").pop()}
+                      {lookupSnapshots.length > 1 || loc.site === "" ? <span className="ml-1 font-normal text-slate-400">· {s.site}</span> : null}
+                    </span>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                      disabled={lookupBusy || s.refreshing}
+                      onClick={() => refreshBook(s.site)}
+                      title="DB 에서 지금 다시 읽기"
+                    >
+                      {lookupBusy || s.refreshing ? "읽는 중…" : "새로고침"}
+                    </button>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-sky-300 hover:bg-slate-700"
+                      onClick={() => openSettings(s.site, !!s.table)}
+                      title="표 · 열 대응 · 갱신 주기 바꾸기"
+                    >
+                      설정
+                    </button>
+                  </span>
+                  <span className="block truncate text-[11px] text-slate-400">
+                    {s.rowCount.toLocaleString("ko-KR")}행 · {s.key.field || "uid"} ↔ {s.key.column} → {s.display.title} · {s.fetchedAt ? formatAgo(s.fetchedAt, now) : "아직 못 읽음"}
+                    {unknownTags > 0 ? ` · 미등록 태그 ${unknownTags}` : ""}
+                  </span>
+                  {s.error ? <span className="block truncate text-[11px] text-amber-300" title={s.error}>{s.error}</span> : null}
+                </li>
+              ))}
+            </ul>
           </section>
 
           <section>
@@ -425,7 +608,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
                   <li key={r.id} className="rounded-lg border border-dashed border-amber-500/40 px-2.5 py-1.5">
                     <span className="block truncate font-semibold">{r.reader}</span>
                     <span className="block truncate text-[11px] text-slate-400">
-                      S/N {r.serial || "-"} · {r.host} · {r.state}{r.present && r.uid ? ` · ${r.uid}` : ""}
+                      S/N {r.serial || "-"} · {r.host} · {r.state}{hasSubject(r) ? ` · ${tagLine(snapshotFor(r.site), r as unknown as Record<string, unknown>)}` : ""}
                     </span>
                   </li>
                 ))}
@@ -437,12 +620,18 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
             <h2 className="mb-1 text-[11px] font-semibold tracking-wide text-slate-400">리더 {match.placed.length}</h2>
             <ul className="flex flex-col gap-1">
               {match.placed.map(({ reader, cells }) => {
-                const paint = readerPaint(reader);
+                const paint = readerPaint(reader, labels[reader.id]);
+                const tag = hasSubject(reader) ? resolveTag(snapshotFor(reader.site), reader as unknown as Record<string, unknown>) : null;
+                const detail = tag ? tag.fields.map((f) => `${f.label}: ${f.value}`).join("\n") : "";
                 return (
-                  <li key={reader.id} className="flex items-center gap-2 rounded-lg bg-slate-800/70 px-2.5 py-1.5">
+                  <li key={reader.id} className="flex items-center gap-2 rounded-lg bg-slate-800/70 px-2.5 py-1.5" title={detail ? `UID ${reader.uid}\n${detail}` : undefined}>
                     <span className="inline-block h-3 w-3 shrink-0 rounded-sm border" style={{ borderColor: paint.stroke, background: paint.fill ?? "transparent" }} aria-hidden="true" />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-semibold">{reader.reader}</span>
+                      <span className="block truncate font-semibold">
+                        {reader.reader}
+                        {tag ? <span className="ml-2 font-normal text-emerald-300">{tag.subtitle ? `${tag.title} · ${tag.subtitle}` : tag.title}</span> : null}
+                        {hasSubject(reader) && !tag ? <span className="ml-2 font-normal text-amber-300">미등록</span> : null}
+                      </span>
                       <span className="block truncate text-[11px] text-slate-400">
                         가로 {cells[0].x + 1} · 세로 {cells[0].y + 1}
                         {cells.length > 1 ? ` (+${cells.length - 1})` : ""} · {reader.online ? (reader.present ? `UID ${reader.uid}` : "비어 있음") : "오프라인"} · {formatAgo(reader.at, now)}
@@ -464,9 +653,12 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
                     {e.kind === "APPEAR" ? "등장" : "제거"}
                   </span>
                   <span className="shrink-0 font-mono tabular-nums text-slate-400">{e.time ? new Date(e.time).toLocaleTimeString("ko-KR", { hour12: false }) : "-"}</span>
-                  <span className="min-w-0 flex-1 truncate">
+                  <span className="min-w-0 flex-1 truncate" title={e.uid ? `UID ${e.uid}` : undefined}>
                     {e.reader}
-                    {e.uid ? <span className="ml-1 font-mono text-slate-300">{e.uid}</span> : null}
+                    {e.uid ? (() => {
+                      const tag = resolveTag(snapshotFor(e.site), e as unknown as Record<string, unknown>);
+                      return tag ? <span className="ml-1 text-emerald-300">{tag.title}</span> : <span className="ml-1 font-mono text-slate-300">{e.uid}</span>;
+                    })() : null}
                     {e.kind === "REMOVE" && e.dwellMs !== null ? <span className="ml-1 text-slate-400">체류 {formatDwell(e.dwellMs)}</span> : null}
                   </span>
                 </li>
@@ -475,6 +667,39 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
           </section>
         </aside>
       </div>
+
+      {formatOpen ? (
+        <FormatSettings
+          site={formatSite}
+          initial={activeFormat}
+          samples={model.samples[formatSite] ?? (loc.site === "" ? Object.values(model.samples)[0] : undefined)}
+          onClose={() => setFormatOpen(false)}
+          onSaved={(format) => {
+            setFormats((cur) => {
+              const sites = { ...(cur?.sites ?? {}) };
+              if (isDefaultFormat(format)) delete sites[format.site];
+              else sites[format.site] = format;
+              return { sites };
+            });
+            setFormatOpen(false);
+            // 이미 받은 상태는 옛 프로필로 읽은 것이다. 다시 붙어 retained 를 새 프로필로 받는다.
+            setReconnectNonce((n) => n + 1);
+          }}
+        />
+      ) : null}
+
+      {settings ? (
+        <LookupSettings
+          site={settings.site}
+          initial={settings.initial}
+          onClose={() => setSettings(null)}
+          onSaved={(snapshot) => {
+            setBook((cur) => ({ sites: { ...(cur?.sites ?? {}), [snapshot.site]: snapshot } }));
+            setBookError(null);
+            setSettings(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

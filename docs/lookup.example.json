@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "site": "default",
+  "source": {
+    "kind": "mssql",
+    "connection": "MES",
+    "table": "dbo.tb_rfid_card",
+    "filters": [{ "column": "사용여부", "op": "ne", "value": "0" }]
+  },
+  "key": { "column": "카드번호", "format": "hex", "reverseBytes": false },
+  "display": { "title": "{정의구분} {정의번호}", "subtitle": "{정의명}" },
+  "columns": [
+    { "column": "정의구분", "label": "구분" },
+    { "column": "정의번호", "label": "번호" },
+    { "column": "정의명", "label": "이름" },
+    { "column": "등록일자", "label": "등록일" },
+    { "column": "등록자" },
+    { "column": "비고" },
+    { "column": "사용여부", "label": "사용", "show": false }
+  ],
+  "refreshSeconds": 300
+}

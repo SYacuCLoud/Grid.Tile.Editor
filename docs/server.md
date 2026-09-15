@@ -25,8 +25,13 @@
 │  └─ 1공장-배치도/
 │     ├─ 0001_2026-08-19T03-00-00-000Z.json   스냅샷 (사진은 photoref:<파일> 참조)
 │     └─ 0002_2026-08-19T03-14-00-000Z.json
-└─ .photos/
-   └─ 3f2a…c1.webp                  스냅샷이 참조하는 사진 (내용 해시 이름 · 한 번만 저장)
+├─ .photos/
+│  └─ 3f2a…c1.webp                  스냅샷이 참조하는 사진 (내용 해시 이름 · 한 번만 저장)
+├─ .lookup/
+│  ├─ connections.json               접속 이름 → env 파일 (관리자가 파일로만 관리 · 비밀은 env 에)
+│  └─ default.json                   사업장별 기준정보 매핑 (UID 열 ↔ 표시 열 · 조건 · 갱신 주기, `/live` 설정 창이 저장)
+└─ .live/
+   └─ {사업장}.json                  MQTT 메시지 형식 프로필 (필드 → JSON 경로 · 값 해석). 없으면 v1. `/live` 의 `형식` 단추가 저장
 ```
 
 리비전 번호는 이력 파일 이름에서 읽습니다. 따로 관리하는 상태가 없으므로 폴더를 복사하거나 합쳐도 계산이 어긋나지 않습니다. 폴더를 옮길 때는 `.photos/` 도 함께 옮깁니다 — 없으면 스냅샷의 사진만 빠지고 도면 파일은 그대로입니다.
@@ -47,8 +52,23 @@
 | `POST` | `/api/projects/:id` | 저장 (자동 스냅샷 · 충돌 시 `409`) |
 | `GET` | `/api/projects/:id/history` | 버전 이력 |
 | `POST` | `/api/projects/:id/restore/:revId` | 과거 버전으로 되돌리기 |
+| `GET` | `/api/lookup` | 실시간 현황판 기준정보 스냅샷 전부 (`{ sites: { default: … } }`) |
+| `GET` | `/api/lookup/_meta/connections` | 접속 이름 목록 (비밀 없음 · `connections.json`) |
+| `GET` | `/api/lookup/_meta/tables?connection=` | 그 접속 DB 의 표 · 뷰 목록 |
+| `GET` | `/api/lookup/_meta/columns?connection=&table=` | 표의 열 이름 · 형 |
+| `GET` | `/api/lookup/:site` | 한 사업장의 스냅샷 (행 · 마지막 읽은 시각 · 오류) |
+| `GET` | `/api/lookup/:site/config` | 화면용 설정 (env 파일 경로 · 자유 WHERE 는 감춤) |
+| `PUT` | `/api/lookup/:site/config` | `{config, author}` 저장 → 바로 읽어 스냅샷까지 돌려줌 |
+| `POST` | `/api/lookup/:site/preview` | `{config}` 초안으로 5행만 읽어 보기 (저장 안 함) |
+| `POST` | `/api/lookup/:site/refresh` | 설정 파일을 다시 훑고 DB 에서 지금 읽기 |
+| `GET` | `/api/live/format` | 현황판 메시지 형식 프로필 전부 (`{ sites, errors }`, 없는 사업장 = 기본 v1) |
+| `GET` | `/api/live/format/:site` | 한 사업장 (파일이 없으면 기본 프로필을 `isDefault:true` 로) |
+| `PUT` | `/api/live/format/:site` | `{format, author}` 저장 (기본과 같으면 파일 삭제) |
+| `DELETE` | `/api/live/format/:site` | 기본(v1)으로 되돌리기 |
 
 용지 설정(`page.paper`)을 포함한 페이지 내용 전체가 서버 파일과 이력 스냅샷에 그대로 저장·복원됩니다.
+
+`/api/lookup` 은 `.grid-projects/.lookup/{site}.json` 에 적힌 SQL Server 표를 `refreshSeconds` 마다 통째로 읽어 메모리에 둔 것입니다. 읽기에 실패하면 마지막 성공분을 그대로 두고 `ok:false` · `error` 만 채웁니다. 접속(비밀)은 `.lookup/connections.json` 파일로만 관리하고 그것을 바꾸는 주소는 없습니다. 매핑(표 · 열 · 템플릿 · 조건 · 갱신 주기)은 `/live` 의 설정 창이 `PUT …/config` 로 저장합니다. 자세한 설정은 README 의 `/live` 절.
 
 > **개발 서버를 오래 켜 두었다면** 설정 파일이 바뀐 뒤 API 미들웨어가 빠질 수 있습니다.
 > 그때 서버 도면 줄은 **사라지지 않고 노란 띠로 바뀌어** 이유와 `다시 연결` 버튼을 보여 줍니다.
@@ -65,7 +85,7 @@
 
 ```
 Grid.Tile.Editor/
-├─ app/            웹 앱 — editor/(편집기) · m/(모바일 보기) · api/projects/(안전망 라우트)
+├─ app/            웹 앱 — editor/(편집기) · m/(모바일 보기) · live/(실시간 현황판) · api/projects/ · api/lookup/(상시 서비스용 라우트 — vinext start 는 Vite 미들웨어를 안 태움)
 ├─ server/         로컬 공유 API — 리비전 저장소 · /api/projects · 사진 분리 · Vite 플러그인
 ├─ mcp/            MCP 서버 — 진입점 · 저장소 · 도구(project · cells · palette · pages · preview · history)
 ├─ scripts/        3100 상시 서비스(service.cmd · server-daemon.cmd) · 빌드 스탬프 · 이력 정리

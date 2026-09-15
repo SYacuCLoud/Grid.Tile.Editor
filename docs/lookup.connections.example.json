@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "connections": {
+    "MES": { "env": "C:/secrets/DB-mes.env" },
+    "창고": { "env": "C:/secrets/DB-wh.env", "server": "10.0.0.5,1433", "database": "warehouse" }
+  }
+}

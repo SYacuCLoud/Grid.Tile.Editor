@@ -302,6 +302,63 @@
 - **주소** — `/live?id=<도면 id>&page=<페이지 id>` 를 벽걸이 PC 의 즐겨찾기에 둡니다. 편집기 도구 막대의 `실시간 현황판 ↗` 이 지금 열린 도면 · 페이지의 이 주소를 새 탭으로 엽니다.
 - mqtt.js 는 번들에 넣지 않고 `public/vendor/mqtt.min.js` 를 브라우저에서 늦게 읽습니다(사내망에서도 돌아야 하니 CDN 은 쓰지 않습니다). 판을 올리려면 `npm run vendor:mqtt`.
 
+### MQTT 메시지 형식 (v1)
+
+형식의 원본과 JSON Schema 는 발행 쪽인 [RfidReaderMonitor `docs/mqtt/`](https://github.com/SYacuCLoud/RfidReaderMonitor/tree/main/docs/mqtt) 에 있습니다. 현황판은 아래 필드만 읽고 **모르는 필드는 무시**하며, 없는 필드는 빈 값으로 칩니다. 다른 발행자(PLC 게이트웨이, Node-RED 등)도 이 필드만 채우면 현황판에 붙습니다.
+
+| 토픽 | 현황판이 쓰는 필드 |
+|---|---|
+| `{prefix}/{site}/reader/{key}/state` (retained) | `serial` 로 장치 대장을 찾고(없으면 토픽의 `{key}`), `present` · `online` 으로 칸 색, `uid` 를 칸에 적음, `reader`(없으면 `alias` → `readerName`) · `host` · `state` · `time` 은 오른쪽 목록에 표시. 빈 페이로드는 그 리더를 지운 것 |
+| `{prefix}/{site}/reader/{key}/event` | `kind`(`APPEAR` / `REMOVE`) 로 잔상 색, `time` · `reader` · `uid` · `dwellMs`(REMOVE) 를 최근 이벤트에. `time` + 토픽 + `kind` 가 같으면 재전송으로 보고 한 번만 |
+| `{prefix}/{site}/host/{host}/status` (retained + LWT) | `online` 으로 감시 PC 점 색, `time` · `readerCount` · `onlineReaders` · `appearToday` · `removeToday` 를 타일에 |
+
+```json
+{"v":1,"type":"state","time":"2026-09-14T15:32:32.931+09:00","host":"PC-LINE1","reader":"1번 저울","alias":"1번 저울","readerName":"ACS ACR1552 1S CL Reader PICC 0","serial":"RR657-005592","present":true,"online":true,"uid":"E0040150ABCDEF01","tech":"ISO 15693","state":"PRESENT"}
+{"v":1,"type":"event","time":"2026-09-14T15:32:40.000+09:00","kind":"REMOVE","reader":"1번 저울","serial":"RR657-005592","uid":"E0040150ABCDEF01","dwellMs":7069,"host":"PC-LINE1"}
+{"v":1,"type":"status","online":true,"host":"PC-LINE1","time":"2026-09-14T15:32:33.931+09:00","version":"0.4.0","readerCount":2,"onlineReaders":2,"presentReaders":1,"appearToday":5,"removeToday":4}
+```
+
+`time` 은 ISO 8601(밀리초 · 시간대 오프셋 포함), `uid` 는 16진 대문자입니다. 토픽 첫 마디 `prefix` 는 무엇이든 받고(구독 필터가 이미 고른 뒤라 따지지 않습니다), `{key}` 는 발행 쪽이 리더 S/N → 별명 → 이름 순으로 채운 값입니다. 해석 코드는 [app/live/liveState.ts](./app/live/liveState.ts) 이고 `tests/live-state.test.mjs` 가 지킵니다.
+
+### 기준정보 매핑 — UID 를 실물 이름으로
+
+리더는 UID 만 줍니다. 그것이 어느 통(桶)인지, 누구의 사원증인지는 회사 기준정보(대개 SQL Server 의 표)에 이미 있으므로, 현황판은 **그 표의 열과 열을 짝짓는 설정**만 받아 UID 대신 이름을 보입니다. 별도의 태그 대장을 만들지 않습니다 — 원본은 한 곳(회사 DB)이어야 합니다.
+
+- **동작** — 도면 서버가 설정에 적힌 표를 **주기적으로 통째로 읽어** 메모리에 들고(`/api/lookup`), 브라우저는 그 스냅샷 하나로 UID 를 찾습니다. 이벤트마다 DB 에 묻지 않으므로 DB 가 멀거나 잠깐 끊겨도 마지막 스냅샷으로 계속 돕니다. 오른쪽 패널 **기준정보** 칸에 행 수 · 마지막 읽은 시각 · 오류 · `새로고침` 이 있습니다.
+- **표시** — 태그가 놓인 칸에는 UID 끝자리 대신 실물 이름(`통번호 129`)이 적히고, 폭에 안 들어가면 글자를 줄이다가 UID 로 물러납니다. 리더 목록에는 `통번호 129 · 칼작업분배`, 최근 이벤트에도 이름이 붙습니다. 기준정보에 없는 UID 는 `미등록 태그` 로 표시됩니다.
+- **두 층으로 나뉩니다.** 접속(어느 DB, 어떤 계정)은 관리자가 서버 파일로, 매핑(어느 표의 어느 열, 무엇을 이름으로, 몇 분마다)은 사용자가 화면에서 정합니다. 비밀번호와 자유 SQL 은 브라우저에 절대 나가지 않습니다.
+- **인증은 없습니다.** 편집기 전체가 사내망 신뢰 모델이라 설정 창과 `/api/lookup` · `/api/live` 도 같은 망의 누구나 쓸 수 있습니다. 저장자 이름과 시각만 파일에 남습니다. 인터넷에 직접 열어 두지 마십시오.
+- **설정 화면** — 기준정보 칸의 `설정`(설정이 없으면 `설정 만들기`). 접속 이름을 고르면 그 DB 의 **표 목록**이, 표를 고르면 **열 목록**이 뜹니다(INFORMATION_SCHEMA). UID 열과 형식(16진수 · 바이트 역순), 칸에 적을 제목 · 부제 템플릿(`{열이름}` — `열 넣기…` 로 조립), 상세에 보일 열과 표시 이름, 조건(`열 · 연산자 · 값`, 모두 AND), **다시 읽는 주기(초)** 를 정하고 `미리보기` 로 5행을 실제 값으로 본 뒤 `저장하고 바로 읽기`. 저장자 이름과 시각이 함께 남습니다.
+- **접속 파일(관리자)** — `.grid-projects/.lookup/connections.json`. 이름 → env 파일(`_env` 규칙: `SERVER` · `DATABASE` · `USERNAME` · `PASSWORD`). 예시는 [docs/lookup.connections.example.json](./docs/lookup.connections.example.json). 계정은 그 표 **SELECT 권한만** 있으면 됩니다 — 이 기능은 쓰기가 없습니다.
+- **매핑 파일** — `.grid-projects/.lookup/{사업장}.json` (사업장 = MQTT 토픽의 `{site}`, 보통 `default`). 설정 화면이 쓰는 파일이고 손으로 고쳐도 다음 갱신(또는 `새로고침`)에 반영됩니다. 예시는 [docs/lookup.example.json](./docs/lookup.example.json).
+
+```json
+{
+  "v": 1,
+  "source": { "kind": "mssql", "connection": "MES", "table": "dbo.tb_rfid_card", "filters": [{ "column": "사용여부", "op": "ne", "value": "0" }] },
+  "key": { "column": "카드번호", "format": "hex" },
+  "display": { "title": "{정의구분} {정의번호}", "subtitle": "{정의명}" },
+  "columns": [ { "column": "정의구분", "label": "구분" }, "정의번호", "정의명", { "column": "등록일자", "label": "등록일" } ],
+  "refreshSeconds": 300
+}
+```
+
+- `key.field` 는 MQTT 메시지 쪽 필드입니다. 기본 `uid`(태그 UID, 태그가 놓여 있을 때만 이름이 붙음). `serial` 로 바꾸면 리더 S/N 으로 **리더 대장**을 잇고 태그가 없어도 리더에 이름이 붙습니다. `reader` · `alias` · `readerName` · `key` · `host` · `tech` 도 되고, 다른 발행자의 필드 이름(`epc` 등)은 직접 적습니다.
+- `key.format` 이 `hex` 면 리더의 `C6 11 7A …` 와 DB 의 `c6117a…` 를 16진수만 남겨 대문자로 맞춰 비교합니다. DB 가 바이트를 거꾸로 저장했다면 `"reverseBytes": true`. 문자 키(카드 번호 문자열)는 `"text"`.
+- `display.title` · `subtitle` 은 `{열이름}` 자리표시 템플릿입니다. 제목이 쓰는 열은 `columns` 에 없어도 읽습니다. `columns` 는 스냅샷에 실어 상세(툴팁)에 보일 열 — 여기 적지 않은 열은 서버 밖으로 나가지 않습니다.
+- 조건 연산자는 `eq`(=) · `ne`(≠, NULL 포함) · `contains`(LIKE) · `empty` · `notEmpty` 입니다. 값은 리터럴로만 들어가고 식별자는 대괄호로 감싸므로 표 · 열 이름에 대괄호 · 공백 · 따옴표는 쓸 수 없습니다. 그 이상의 조건이 필요하면 관리자가 파일에 `source.where`(자유 SQL, 화면에는 있다는 사실만 보임)를 적거나 DB 에 뷰를 만듭니다.
+- 접속 이름 없이 `source.env` 로 env 파일을 직접 가리키는 구식 설정도 그대로 읽습니다. 화면에서 접속 이름을 고르면 그쪽으로 바뀝니다.
+- 지금은 `mssql` 소스만 있습니다. 순수 계산은 [app/live/lookup.ts](./app/live/lookup.ts), DB 읽기 · 접속은 `server/lookupStore.ts`, 경로 규칙은 `server/lookupRouter.ts`, 화면은 `app/live/LookupSettings.tsx`, `tests/lookup.test.mjs` 가 지킵니다.
+
+### 메시지 형식 프로필 — 다른 발행자의 페이로드 받기
+
+위 "MQTT 메시지 형식 (v1)" 은 RfidReaderMonitor 가 내는 모양입니다. PLC 게이트웨이 · Node-RED 처럼 `{"tag":{"epc":"…"},"detected":"ON","ts":1789443082}` 식으로 다르게 내는 발행자는 **형식 프로필**로 맞춥니다. 토픽 구조(`{prefix}/{site}/reader/{key}/state` 등)는 그대로여야 합니다 — 구독 필터와 칸 잇기 규칙이 거기 걸려 있습니다.
+
+- **화면** — 머리줄 접속 표시 옆 `형식 v1`(또는 `형식 사용자 정의`). 상태 · 이벤트 · PC 상태 세 탭에 현황판이 쓰는 필드 목록이 있고, 필드마다 **JSON 경로**(`tag.epc`, `readers[0].id`)를 적습니다. 오른쪽에 그 사업장에서 **마지막에 실제로 받은 메시지 원문**이 떠 있고, 경로를 고치면 표에서 "표본에서 읽은 값" 이 바로 바뀝니다(표본에 없는 경로는 노랗게). 아래에 값 해석 — 참으로 볼 글자 값(`ON`, `1` …), 제거로 볼 kind 값(`OUT` …), 시각 해석(자동 · ISO · epoch ms · epoch s). `저장하고 다시 읽기` 를 누르면 브로커에 다시 붙어 retained 를 새 프로필로 읽습니다. `기본값(v1)으로` 되돌리면 파일이 지워집니다.
+- **파일** — `.grid-projects/.live/{사업장}.json`. 없는 사업장은 v1 입니다. 안 적은 필드는 v1 경로(= 필드 이름), 빈 경로는 "읽지 않음" 입니다.
+- **규칙** — `present` · `online` 은 불리언 · 숫자를 그대로, 글자는 참 목록에 있을 때만 참. `online` 경로가 표본에 없으면 살아 있는 것으로 봅니다. `kind` 는 제거 목록에 있으면 제거, 아니면 등장. `time` 이 숫자면 epoch(자동은 크기로 ms/s 판단), 글자면 그대로. `dwellMs` 는 숫자 글자도 받습니다.
+- 순수 계산은 [app/live/messageFormat.ts](./app/live/messageFormat.ts)(경로 · 값 해석 · 미리보기), 메시지 반영은 `app/live/liveState.ts` 의 `applyMessage(…, book)`, 파일은 `server/formatStore.ts`, 화면은 `app/live/FormatSettings.tsx`, `tests/message-format.test.mjs` 가 지킵니다.
+
 ---
 
 ## 🖨️ 용지 규격에 맞춘 PNG

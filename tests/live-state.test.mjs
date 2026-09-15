@@ -38,11 +38,11 @@ const STATUS_ON = JSON.stringify({ type: "status", online: true, host: "PC-1", t
 const STATUS_OFF = JSON.stringify({ type: "status", online: false, host: "PC-1" });
 
 test("토픽 해석: reader/state · reader/event · host/status, 다른 것은 null", () => {
-  assert.deepEqual(parseTopic("rfid/cheonga/reader/RR657-005592/state"), { kind: "state", site: "cheonga", key: "RR657-005592" });
+  assert.deepEqual(parseTopic("rfid/site-a/reader/RR657-005592/state"), { kind: "state", site: "site-a", key: "RR657-005592" });
   assert.deepEqual(parseTopic("x/s1/reader/K/event"), { kind: "event", site: "s1", key: "K" });
-  assert.deepEqual(parseTopic("rfid/cheonga/host/PC-1/status"), { kind: "status", site: "cheonga", host: "PC-1" });
-  assert.equal(parseTopic("rfid/cheonga/reader/K"), null);
-  assert.equal(parseTopic("rfid/cheonga/reader/K/unknown"), null);
+  assert.deepEqual(parseTopic("rfid/site-a/host/PC-1/status"), { kind: "status", site: "site-a", host: "PC-1" });
+  assert.equal(parseTopic("rfid/site-a/reader/K"), null);
+  assert.equal(parseTopic("rfid/site-a/reader/K/unknown"), null);
   assert.equal(parseTopic("rfid//reader/K/state"), null);
 });
 
@@ -174,7 +174,7 @@ test("글자 도우미 · 구독 필터 · 기본 브로커 주소", () => {
   assert.equal(formatDwell(125_000), "2.1분");
   assert.equal(formatDwell(null), "");
   assert.deepEqual(subscriptionTopics("rfid", ""), ["rfid/+/reader/+/state", "rfid/+/reader/+/event", "rfid/+/host/+/status"]);
-  assert.deepEqual(subscriptionTopics(" ", "cheonga"), ["rfid/cheonga/reader/+/state", "rfid/cheonga/reader/+/event", "rfid/cheonga/host/+/status"]);
+  assert.deepEqual(subscriptionTopics(" ", "site-a"), ["rfid/site-a/reader/+/state", "rfid/site-a/reader/+/event", "rfid/site-a/host/+/status"]);
   assert.equal(defaultBrokerUrl("192.168.0.41"), "ws://192.168.0.41:9001");
   assert.equal(defaultBrokerUrl(""), "ws://localhost:9001");
 });
