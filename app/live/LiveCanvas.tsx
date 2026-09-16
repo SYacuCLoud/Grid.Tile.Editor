@@ -16,6 +16,8 @@ interface LiveCanvasProps {
   now: number;
   /** 리더 id → 칸에 적을 실물 이름. 기준정보에서 찾은 것만 들어 있다. */
   labels?: Record<string, string>;
+  /** 리더 id → 잔상 글자(마지막에 있던 태그). 유지 시간 안의 것만 들어 있다. */
+  ghosts?: Record<string, string>;
 }
 
 /**
@@ -27,7 +29,7 @@ interface LiveCanvasProps {
  * 다시 그려야 한다.
  */
 export function LiveCanvas(props: LiveCanvasProps) {
-  const { doc, visible, placed, flashes, now, labels } = props;
+  const { doc, visible, placed, flashes, now, labels, ghosts } = props;
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const baseRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
@@ -75,8 +77,8 @@ export function LiveCanvas(props: LiveCanvasProps) {
     if (!ctx) return;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, canvasW, canvasH);
-    drawOverlay(ctx, cell, placed, flashes, now, labels);
-  }, [canvasH, canvasW, cell, flashes, labels, now, placed, ratio]);
+    drawOverlay(ctx, cell, placed, flashes, now, labels, ghosts);
+  }, [canvasH, canvasW, cell, flashes, ghosts, labels, now, placed, ratio]);
 
   return (
     <div ref={wrapRef} className="relative h-full w-full">
@@ -102,9 +104,10 @@ export function drawOverlay(
   flashes: Record<string, Flash>,
   now: number,
   labels?: Record<string, string>,
+  ghosts?: Record<string, string>,
 ) {
   for (const { reader, cells } of placed) {
-    const paint = readerPaint(reader, labels?.[reader.id]);
+    const paint = readerPaint(reader, labels?.[reader.id], ghosts?.[reader.id]);
     let minX = Number.POSITIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
@@ -132,21 +135,35 @@ export function drawOverlay(
     }
 
     if (paint.text && cell >= 14 && cells.length > 0) {
-      const box = fitLabel(ctx, paint.text, shortUid(reader.uid), maxX - minX - 4, maxY - minY - 4, cell);
+      const box = fitLabel(ctx, paint.text, shortUid(paint.ghost ? reader.lastUid : reader.uid), maxX - minX - 4, maxY - minY - 4, cell);
       ctx.font = box.font;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.lineWidth = Math.max(2, box.fontSize * 0.28);
-      ctx.strokeStyle = "rgba(15, 23, 42, 0.85)";
       ctx.lineJoin = "round";
       const cx = (minX + maxX) / 2;
       const top = (minY + maxY) / 2 - ((box.lines.length - 1) * box.lineHeight) / 2;
-      box.lines.forEach((line, index) => {
-        const cy = top + index * box.lineHeight;
-        ctx.strokeText(line, cx, cy);
-        ctx.fillStyle = "#ffffff";
-        ctx.fillText(line, cx, cy);
-      });
+      if (paint.ghost) {
+        // 잔상 — 마지막에 있던 태그. 흰 바탕 위 회색 · 반투명. 채움도 테두리 강조도 없어 "지금은 없다" 가 먼저 읽힌다.
+        ctx.globalAlpha = 0.55;
+        ctx.lineWidth = Math.max(2, box.fontSize * 0.22);
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+        box.lines.forEach((line, index) => {
+          const cy = top + index * box.lineHeight;
+          ctx.strokeText(line, cx, cy);
+          ctx.fillStyle = LIVE_COLORS.ghost;
+          ctx.fillText(line, cx, cy);
+        });
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.lineWidth = Math.max(2, box.fontSize * 0.28);
+        ctx.strokeStyle = "rgba(15, 23, 42, 0.85)";
+        box.lines.forEach((line, index) => {
+          const cy = top + index * box.lineHeight;
+          ctx.strokeText(line, cx, cy);
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(line, cx, cy);
+        });
+      }
     }
 
     // 잔상 — 칸 둘레에서 바깥으로 퍼지며 옅어지는 테.

@@ -15,6 +15,8 @@ import {
   EMPTY_LIVE,
   formatAgo,
   formatDwell,
+  ghostTtlMs,
+  ghostVisible,
   hasLiveFlash,
   LIVE_COLORS,
   type LiveModel,
@@ -24,7 +26,7 @@ import {
   type ReaderState,
   subscriptionTopics,
 } from "./liveState";
-import { type LookupBook, type LookupSnapshot, pickSnapshot, resolveTag, tagLine } from "./lookup";
+import { type LookupBook, type LookupSnapshot, pickSnapshot, resolveTag, tagLabel, tagLine } from "./lookup";
 import { loadFormatBook } from "./formatClient";
 import { FormatSettings } from "./FormatSettings";
 import { loadLookupBook, loadLookupConfig, type PublicLookupConfig, refreshLookup } from "./lookupClient";
@@ -53,9 +55,11 @@ interface Location {
   broker: string | null;
   site: string;
   prefix: string;
+  /** 잔상 유지 시간(분) 원문. 없으면 기본(20). `0` 이면 끔. */
+  ghost: string | null;
 }
 
-/** 주소의 `?id=…&page=…&broker=ws://…:9001&site=…&prefix=…`. 벽걸이 PC 는 이 주소를 즐겨찾기에 둔다. */
+/** 주소의 `?id=…&page=…&broker=ws://…:9001&site=…&prefix=…&ghost=분`. 벽걸이 PC 는 이 주소를 즐겨찾기에 둔다. */
 function parseLocation(search: string): Location {
   const p = new URLSearchParams(search);
   return {
@@ -64,6 +68,7 @@ function parseLocation(search: string): Location {
     broker: p.get("broker"),
     site: p.get("site") ?? "",
     prefix: p.get("prefix") ?? "rfid",
+    ghost: p.get("ghost"),
   };
 }
 
@@ -75,6 +80,7 @@ function writeLocation(loc: Location) {
   if (loc.broker) p.set("broker", loc.broker);
   if (loc.site) p.set("site", loc.site);
   if (loc.prefix && loc.prefix !== "rfid") p.set("prefix", loc.prefix);
+  if (loc.ghost !== null && loc.ghost !== "") p.set("ghost", loc.ghost);
   const query = p.toString();
   window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
 }
@@ -393,6 +399,18 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
     }
     return { labels, unknownTags };
   }, [hasSubject, readers, snapshotFor]);
+
+  // 잔상 — 들어낸 태그의 이름을 유지 시간 동안 회색으로 남긴다. 시계(now)가 틱마다 바뀌므로 만료도 저절로 반영된다.
+  const ghostTtl = ghostTtlMs(loc.ghost);
+  const ghosts = useMemo(() => {
+    const out: Record<string, string> = {};
+    if (ghostTtl <= 0) return out;
+    for (const reader of readers) {
+      if (!ghostVisible(reader, now, ghostTtl)) continue;
+      out[reader.id] = tagLabel(snapshotFor(reader.site), reader.lastUid);
+    }
+    return out;
+  }, [ghostTtl, now, readers, snapshotFor]);
   const lookupSnapshots = useMemo(() => {
     const sites = book ? Object.values(book.sites) : [];
     if (loc.site) return sites.filter((s) => s.site === loc.site);
@@ -514,7 +532,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
       <div className="flex min-h-0 flex-1">
         <main className="relative min-w-0 flex-1 p-2">
           {doc ? (
-            <LiveCanvas key={`${opened?.id}:${page?.id}`} doc={doc} visible={visible} placed={match.placed} flashes={model.flashes} now={now} labels={labels} />
+            <LiveCanvas key={`${opened?.id}:${page?.id}`} doc={doc} visible={visible} placed={match.placed} flashes={model.flashes} now={now} labels={labels} ghosts={ghosts} />
           ) : (
             <p className="p-4 text-sm text-slate-400">{openError ?? "도면 읽는 중…"}</p>
           )}
@@ -620,8 +638,9 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
             <h2 className="mb-1 text-[11px] font-semibold tracking-wide text-slate-400">리더 {match.placed.length}</h2>
             <ul className="flex flex-col gap-1">
               {match.placed.map(({ reader, cells }) => {
-                const paint = readerPaint(reader, labels[reader.id]);
+                const paint = readerPaint(reader, labels[reader.id], ghosts[reader.id]);
                 const tag = hasSubject(reader) ? resolveTag(snapshotFor(reader.site), reader as unknown as Record<string, unknown>) : null;
+                const ghostText = ghosts[reader.id] ? `마지막 ${tagLine(snapshotFor(reader.site), reader.lastUid)} · ${formatAgo(reader.lastAt, now)}` : "";
                 const detail = tag ? tag.fields.map((f) => `${f.label}: ${f.value}`).join("\n") : "";
                 return (
                   <li key={reader.id} className="flex items-center gap-2 rounded-lg bg-slate-800/70 px-2.5 py-1.5" title={detail ? `UID ${reader.uid}\n${detail}` : undefined}>
@@ -636,6 +655,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
                         가로 {cells[0].x + 1} · 세로 {cells[0].y + 1}
                         {cells.length > 1 ? ` (+${cells.length - 1})` : ""} · {reader.online ? (reader.present ? `UID ${reader.uid}` : "비어 있음") : "오프라인"} · {formatAgo(reader.at, now)}
                       </span>
+                      {ghostText ? <span className="block truncate text-[11px] text-slate-500">{ghostText}</span> : null}
                     </span>
                   </li>
                 );

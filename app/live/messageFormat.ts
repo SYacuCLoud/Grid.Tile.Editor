@@ -12,7 +12,7 @@
 
 export const FORMAT_VERSION = 1;
 
-export const STATE_FIELDS = ["uid", "present", "online", "serial", "reader", "alias", "readerName", "host", "tech", "state", "time"] as const;
+export const STATE_FIELDS = ["uid", "present", "online", "serial", "reader", "alias", "readerName", "host", "tech", "state", "time", "lastUid", "lastTime"] as const;
 export const EVENT_FIELDS = ["kind", "uid", "serial", "reader", "alias", "readerName", "host", "time", "dwellMs"] as const;
 export const STATUS_FIELDS = ["online", "host", "time", "version", "readerCount", "onlineReaders", "presentReaders", "appearToday", "removeToday"] as const;
 
@@ -33,6 +33,8 @@ export const FIELD_HELP: Record<string, string> = {
   tech: "태그 기술 (ISO 15693 등)",
   state: "상태 글자 (PRESENT · EMPTY · 뽑힘 …)",
   time: "바뀐 시각 (ISO 8601 또는 epoch)",
+  lastUid: "(선택) 마지막에 놓여 있던 태그 UID — 화면을 늦게 켜도 잔상을 채운다",
+  lastTime: "(선택) 그 태그를 들어낸 시각",
   kind: "이벤트 종류 — 제거값 목록에 있으면 제거, 아니면 등장",
   dwellMs: "체류 시간(ms, 제거 이벤트)",
   version: "감시 프로그램 판",

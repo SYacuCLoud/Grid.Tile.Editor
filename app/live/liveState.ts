@@ -52,7 +52,19 @@ export interface ReaderState {
   at: string;
   /** 이 브라우저가 받은 시각(ms). */
   receivedAt: number;
+  /**
+   * 잔상 — 마지막으로 놓여 있던 태그. 태그를 들어낸 뒤 다음 태그가 올 때까지 남는다.
+   * 발행 쪽이 `lastUid` 를 실어 주면 화면을 늦게 켜도 채워지고, 아니면 이 브라우저가 본 제거 순간에 채운다.
+   */
+  lastUid: string;
+  /** 들어낸 시각(ISO). 사람이 읽는 "n분 전" 용. */
+  lastAt: string;
+  /** 잔상을 만든 브라우저 시각(ms). 잔상 만료는 이것으로 센다 — 감시 PC 시계가 어긋나도 흔들리지 않게. */
+  lastSeenAt: number;
 }
+
+/** 잔상 기본 유지 시간(분). 주소의 `?ghost=분` 으로 바꾼다. 0 이면 끔. */
+export const DEFAULT_GHOST_MINUTES = 20;
 
 export interface HostStatus {
   id: string;
@@ -197,6 +209,18 @@ export function applyMessage(model: LiveModel, topic: string, payload: string, n
     if (!json) return { ...model, received, samples };
     const g = (field: StateField) => getPath(json, fmt.state[field]);
     const onlineRaw = g("online");
+    const prev = model.readers[id];
+    const present = readBool(g("present"), rules);
+    const uid = readString(g("uid"));
+    const at = readTime(g("time"), rules) || readTime(json.at, rules);
+    // 잔상: 태그가 있으면 없음. 방금 들어냈으면 직전 UID. 그 밖에는 (발행 쪽이 실어 준 값 →) 전에 만든 잔상 유지.
+    let ghost = { lastUid: "", lastAt: "", lastSeenAt: 0 };
+    if (!present) {
+      const published = readString(g("lastUid"));
+      if (prev?.present && prev.uid) ghost = { lastUid: prev.uid, lastAt: at || new Date(now).toISOString(), lastSeenAt: now };
+      else if (prev?.lastUid) ghost = { lastUid: prev.lastUid, lastAt: prev.lastAt, lastSeenAt: prev.lastSeenAt };
+      else if (published) ghost = { lastUid: published, lastAt: readTime(g("lastTime"), rules) || at, lastSeenAt: now };
+    }
     const reader: ReaderState = {
       id,
       site: parsed.site,
@@ -206,15 +230,16 @@ export function applyMessage(model: LiveModel, topic: string, payload: string, n
       alias: readString(g("alias")),
       readerName: readString(g("readerName")),
       serial: readString(g("serial")),
-      present: readBool(g("present"), rules),
+      present,
       // online 이 없는 발행자는 살아 있는 것으로 본다.
       online: onlineRaw === undefined ? true : readBool(onlineRaw, rules),
-      uid: readString(g("uid")),
+      uid,
       tech: readString(g("tech")),
       state: readString(g("state")),
       // v1 은 `time`. 스키마 확정 전 시험판이 `at` 으로 냈으므로 그것도 받는다.
-      at: readTime(g("time"), rules) || readTime(json.at, rules),
+      at,
       receivedAt: now,
+      ...ghost,
     };
     return { ...model, readers: { ...model.readers, [id]: reader }, received, samples };
   }
@@ -243,7 +268,27 @@ export function applyMessage(model: LiveModel, topic: string, payload: string, n
   // 같은 이벤트가 두 번 오면(QoS 1 재전송) 한 번만 남긴다.
   if (model.events.some((e) => e.id === event.id)) return { ...model, received, samples };
   const events = [event, ...model.events].slice(0, MAX_EVENTS);
-  return { ...model, events, flashes: { ...model.flashes, [id]: { kind, at: now } }, received, samples };
+  // 제거 이벤트의 UID 로도 잔상을 채운다 — 상태(retained)가 먼저 와 잔상을 못 만든 리더를 위해.
+  let readers = model.readers;
+  const current = model.readers[id];
+  if (kind === "REMOVE" && event.uid && current && !current.present && !current.lastUid) {
+    readers = { ...readers, [id]: { ...current, lastUid: event.uid, lastAt: time || new Date(now).toISOString(), lastSeenAt: now } };
+  }
+  return { ...model, readers, events, flashes: { ...model.flashes, [id]: { kind, at: now } }, received, samples };
+}
+
+/** 잔상이 보일 때인가. 비어 있고, 잔상이 있고, 유지 시간 안. `ttlMs` 0 이면 끔. */
+export function ghostVisible(reader: ReaderState, now: number, ttlMs: number): boolean {
+  if (ttlMs <= 0 || reader.present || !reader.lastUid || !reader.online) return false;
+  return now - reader.lastSeenAt <= ttlMs;
+}
+
+/** 주소의 `?ghost=분` → ms. 없으면 기본, 숫자가 아니면 기본, 음수는 0. */
+export function ghostTtlMs(param: string | null): number {
+  if (param === null || param.trim() === "") return DEFAULT_GHOST_MINUTES * 60_000;
+  const minutes = Number(param);
+  if (!Number.isFinite(minutes)) return DEFAULT_GHOST_MINUTES * 60_000;
+  return Math.max(0, minutes) * 60_000;
 }
 
 /** 잔상의 남은 진하기(1 → 0). 끝났으면 0. */
@@ -356,6 +401,8 @@ export const LIVE_COLORS = {
   offline: "#6b7280",
   appear: "#22c55e",
   remove: "#f97316",
+  /** 잔상 글자. 흰 글씨(태그 있음)와 갈리게 회색. */
+  ghost: "#64748b",
 } as const;
 
 export interface ReaderPaint {
@@ -367,20 +414,26 @@ export interface ReaderPaint {
   dashed: boolean;
   /** 칸 안에 적을 글자. 없으면 빈 문자열. */
   text: string;
+  /** 글자가 잔상(마지막에 있던 태그)인가. 회색 · 반투명으로 그린다. */
+  ghost: boolean;
 }
 
 /**
  * 리더 상태 → 칸을 어떻게 그릴지.
  * `label` 을 주면 칸 글자로 그것을 쓴다(기준정보에서 찾은 실물 이름). 없으면 짧은 UID.
+ * `ghostLabel` 은 비어 있는 칸에 남길 잔상 글자. 부르는 쪽이 `ghostVisible` 로 걸러 넘긴다.
  */
-export function readerPaint(reader: ReaderState, label?: string): ReaderPaint {
+export function readerPaint(reader: ReaderState, label?: string, ghostLabel?: string): ReaderPaint {
   if (!reader.online) {
-    return { fill: LIVE_COLORS.offline, fillAlpha: 0.35, stroke: LIVE_COLORS.offline, strokeWidth: 1.5, dashed: true, text: "" };
+    return { fill: LIVE_COLORS.offline, fillAlpha: 0.35, stroke: LIVE_COLORS.offline, strokeWidth: 1.5, dashed: true, text: "", ghost: false };
   }
   if (reader.present) {
-    return { fill: LIVE_COLORS.present, fillAlpha: 0.45, stroke: LIVE_COLORS.present, strokeWidth: 2, dashed: false, text: label || shortUid(reader.uid) };
+    return { fill: LIVE_COLORS.present, fillAlpha: 0.45, stroke: LIVE_COLORS.present, strokeWidth: 2, dashed: false, text: label || shortUid(reader.uid), ghost: false };
   }
-  return { fill: null, fillAlpha: 0, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: "" };
+  if (ghostLabel) {
+    return { fill: null, fillAlpha: 0, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: ghostLabel, ghost: true };
+  }
+  return { fill: null, fillAlpha: 0, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: "", ghost: false };
 }
 
 // ------------------------------------------------------------ 칸 글자 맞추기
@@ -514,9 +567,12 @@ export function defaultBrokerUrl(hostname: string): string {
 
 // ------------------------------------------------------------ JSON 도우미
 
+/** 페이로드 앞의 BOM. Windows 도구(메모장 · PowerShell Set-Content)가 붙이면 JSON.parse 가 터진다. */
+const PAYLOAD_BOM = String.fromCharCode(0xfeff);
+
 function parseJson(payload: string): Record<string, unknown> | null {
   try {
-    const value: unknown = JSON.parse(payload);
+    const value: unknown = JSON.parse(payload.startsWith(PAYLOAD_BOM) ? payload.slice(1) : payload);
     return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
   } catch {
     return null;

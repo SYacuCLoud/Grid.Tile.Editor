@@ -16,6 +16,8 @@ import {
   flashAlpha,
   formatAgo,
   formatDwell,
+  ghostTtlMs,
+  ghostVisible,
   hasLiveFlash,
   matchReaders,
   MAX_EVENTS,
@@ -36,6 +38,69 @@ const EVENT_APPEAR = JSON.stringify({ type: "event", time: "2026-09-14T15:32:32.
 const EVENT_REMOVE = JSON.stringify({ type: "event", time: "2026-09-14T15:32:40.000+09:00", kind: "REMOVE", reader: "1번 저울", serial: "RR657-005592", uid: "E0040150ABCDEF01", dwellMs: 7069, host: "PC-1" });
 const STATUS_ON = JSON.stringify({ type: "status", online: true, host: "PC-1", time: "2026-09-14T15:32:33.931+09:00", version: "0.3.2", readerCount: 2, onlineReaders: 2, presentReaders: 1, appearToday: 5, removeToday: 4 });
 const STATUS_OFF = JSON.stringify({ type: "status", online: false, host: "PC-1" });
+
+test("잔상: 태그를 들어내면 마지막 UID 가 남고, 새 태그가 오면 사라지고, 유지 시간이 지나면 보이지 않는다", () => {
+  const t0 = 1_000_000;
+  const id = "s/RR657-005592";
+  let m = applyMessage(EMPTY_LIVE, "rfid/s/reader/RR657-005592/state", STATE_PRESENT, t0);
+  assert.equal(m.readers[id].lastUid, "", "태그가 있을 때는 잔상 없음");
+
+  m = applyMessage(m, "rfid/s/reader/RR657-005592/state", STATE_EMPTY, t0 + 1000);
+  const r = m.readers[id];
+  assert.equal(r.present, false);
+  assert.equal(r.lastUid, "E0040150ABCDEF01", "직전 UID 가 잔상으로");
+  assert.equal(r.lastAt, "2026-09-14T15:32:40.000+09:00", "들어낸 시각 = 빈 상태의 time");
+  assert.equal(r.lastSeenAt, t0 + 1000);
+  assert.equal(ghostVisible(r, t0 + 1000 + 19 * 60_000, 20 * 60_000), true, "20분 안");
+  assert.equal(ghostVisible(r, t0 + 1000 + 21 * 60_000, 20 * 60_000), false, "20분 지남");
+  assert.equal(ghostVisible(r, t0 + 1000, 0), false, "0 이면 끔");
+  assert.equal(ghostVisible({ ...r, online: false }, t0 + 1000, 20 * 60_000), false, "오프라인 칸에는 안 그린다");
+
+  // 같은 빈 상태가 다시 와도(하트비트) 잔상은 그대로.
+  m = applyMessage(m, "rfid/s/reader/RR657-005592/state", STATE_EMPTY.replace("15:32:40", "15:33:40"), t0 + 2000);
+  assert.equal(m.readers[id].lastUid, "E0040150ABCDEF01");
+  assert.equal(m.readers[id].lastSeenAt, t0 + 1000, "만료 기준 시각은 처음 들어낸 때");
+
+  // 새 태그가 오면 잔상이 사라진다.
+  m = applyMessage(m, "rfid/s/reader/RR657-005592/state", STATE_PRESENT.replace("E0040150ABCDEF01", "E004AAAA"), t0 + 3000);
+  assert.equal(m.readers[id].lastUid, "");
+  assert.equal(m.readers[id].uid, "E004AAAA");
+
+  // 그리기: 잔상은 채움 없이 파란 테두리 + 회색 글자.
+  const ghostPaint = readerPaint({ ...r, present: false }, undefined, "통번호 129");
+  assert.equal(ghostPaint.ghost, true);
+  assert.equal(ghostPaint.text, "통번호 129");
+  assert.equal(ghostPaint.fill, null);
+  assert.equal(readerPaint({ ...r, present: false }).ghost, false, "잔상 글자를 안 넘기면 빈 칸 그대로");
+});
+
+test("잔상: 화면을 늦게 켜도 발행 쪽 lastUid 나 제거 이벤트로 채운다", () => {
+  const t0 = 1_000_000;
+  const id = "s/RR657-005592";
+  // 1) 발행 쪽이 선택 필드 lastUid · lastTime 을 실어 준 경우.
+  const published = JSON.stringify({ present: false, online: true, uid: "", lastUid: "E004BBBB", lastTime: "2026-09-14T15:00:00+09:00", time: "2026-09-14T15:10:00+09:00" });
+  const a = applyMessage(EMPTY_LIVE, "rfid/s/reader/RR657-005592/state", published, t0);
+  assert.equal(a.readers[id].lastUid, "E004BBBB");
+  assert.equal(a.readers[id].lastAt, "2026-09-14T15:00:00+09:00");
+
+  // 2) retained 빈 상태가 먼저 오고(잔상 없음), 뒤에 제거 이벤트가 오면 그 UID 로 채운다.
+  let b = applyMessage(EMPTY_LIVE, "rfid/s/reader/RR657-005592/state", STATE_EMPTY, t0);
+  assert.equal(b.readers[id].lastUid, "");
+  b = applyMessage(b, "rfid/s/reader/RR657-005592/event", EVENT_REMOVE, t0 + 10);
+  assert.equal(b.readers[id].lastUid, "E0040150ABCDEF01");
+  assert.equal(b.readers[id].lastSeenAt, t0 + 10);
+  // 이미 잔상이 있으면 이벤트가 덮어쓰지 않는다.
+  b = applyMessage(b, "rfid/s/reader/RR657-005592/event", EVENT_REMOVE.replace("ABCDEF01", "CCCC").replace("15:32:40.000", "15:32:41.000"), t0 + 20);
+  assert.equal(b.readers[id].lastUid, "E0040150ABCDEF01");
+
+  // 주소 매개변수 → 유지 시간.
+  assert.equal(ghostTtlMs(null), 20 * 60_000);
+  assert.equal(ghostTtlMs(""), 20 * 60_000);
+  assert.equal(ghostTtlMs("5"), 5 * 60_000);
+  assert.equal(ghostTtlMs("0"), 0);
+  assert.equal(ghostTtlMs("-3"), 0);
+  assert.equal(ghostTtlMs("abc"), 20 * 60_000);
+});
 
 test("토픽 해석: reader/state · reader/event · host/status, 다른 것은 null", () => {
   assert.deepEqual(parseTopic("rfid/site-a/reader/RR657-005592/state"), { kind: "state", site: "site-a", key: "RR657-005592" });
