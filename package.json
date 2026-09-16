@@ -14,7 +14,7 @@
     "service": "cmd /c scripts\\service.cmd",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run build && npm run test:render && npm run test:unit",
-    "test:unit": "tsx --test tests/range-clipboard.test.mjs tests/multipage.test.mjs tests/render-legend.test.mjs tests/cell-text.test.mjs tests/zoom.test.mjs tests/paper.test.mjs tests/pattern.test.mjs tests/cell-style.test.mjs tests/palette-collapse.test.mjs tests/layers.test.mjs tests/print-sheet.test.mjs tests/ruler-watermark.test.mjs tests/diff-photo.test.mjs tests/photo-ledger.test.mjs tests/photo-lightbox.test.mjs tests/video.test.mjs tests/live-state.test.mjs tests/lookup.test.mjs tests/message-format.test.mjs tests/opacity.test.mjs tests/memo-print.test.mjs tests/note-bubble.test.mjs tests/zone.test.mjs tests/device.test.mjs tests/connection.test.mjs tests/mcp-tools.test.mjs tests/projects-api.test.mjs tests/history-store.test.mjs tests/mobile-view.test.mjs",
+    "test:unit": "tsx --test tests/range-clipboard.test.mjs tests/multipage.test.mjs tests/render-legend.test.mjs tests/cell-text.test.mjs tests/zoom.test.mjs tests/paper.test.mjs tests/pattern.test.mjs tests/cell-style.test.mjs tests/palette-collapse.test.mjs tests/layers.test.mjs tests/print-sheet.test.mjs tests/ruler-watermark.test.mjs tests/diff-photo.test.mjs tests/photo-ledger.test.mjs tests/photo-lightbox.test.mjs tests/video.test.mjs tests/live-state.test.mjs tests/lookup.test.mjs tests/message-format.test.mjs tests/event-log.test.mjs tests/opacity.test.mjs tests/memo-print.test.mjs tests/note-bubble.test.mjs tests/zone.test.mjs tests/device.test.mjs tests/connection.test.mjs tests/mcp-tools.test.mjs tests/projects-api.test.mjs tests/history-store.test.mjs tests/mobile-view.test.mjs",
     "test:render": "node --test tests/rendered-html.test.mjs tests/rendered-mobile.test.mjs tests/rendered-live.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
@@ -30,7 +30,8 @@
     "mssql": "^12.7.2",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "mqtt": "^5.15.2"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
@@ -51,7 +52,6 @@
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "7.1.1",
     "globals": "16.4.0",
-    "mqtt": "^5.15.2",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
     "tsx": "4.22.1",

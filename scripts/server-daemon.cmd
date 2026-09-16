@@ -38,6 +38,12 @@ if not exist "%SERVE%\dist\server\index.js" (
   ping -n 31 127.0.0.1 >nul
   goto loop
 )
+rem Event logger: a separate Node process subscribes to the broker and writes .grid-projects\.live\events\*.jsonl.
+rem (vinext start runs route code in a Cloudflare-compatible runtime without net, so the web server cannot subscribe itself.)
+rem It exits at once if another logger is alive (PID file) and stops by itself when stop.flag appears.
+set "GRID_SERVE_DIR=%SERVE%"
+set "GRID_LIVE_INSTANCE=main"
+start "" /b cmd /c "node ""%ROOT%\node_modules\tsx\dist\cli.mjs"" ""%ROOT%\scripts\live-logger.ts"" >> ""%ROOT%\logs\live-logger.log"" 2>&1"
 >> "%LOG%" echo [%date% %time%] starting server on port %PORT% from .serve\dist
 pushd "%SERVE%"
 node "%ROOT%\node_modules\vinext\dist\cli.js" start -p %PORT% >> "%LOG%" 2>&1

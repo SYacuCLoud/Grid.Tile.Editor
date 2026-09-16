@@ -1,14 +1,16 @@
 /**
- * `/api/live` App Router 라우트 — 실시간 현황판의 메시지 형식 프로필.
+ * `/api/live` App Router 라우트 — 실시간 현황판의 메시지 형식 프로필 · 이벤트 로그.
  *
  * 상시 서비스(`vinext start`)는 Vite 미들웨어를 태우지 않으므로 여기서 같은 API 를 제공한다.
  * 경로 규칙은 `server/liveRouter.ts` 하나를 둘이 함께 쓴다. `/api/lookup` 라우트와 같은 구조다.
+ *
+ * 이벤트 기록(브로커 구독)은 별도 프로세스 `scripts/live-logger.ts` 가 하고(데몬이 띄움), 여기서는 그 파일을 읽기만 한다.
  */
 
-import type { FormatStore } from "../../../../server/formatStore";
+import type { LiveStore } from "../../../../server/liveRouter";
 import { liveStatusOf, parseLivePath, routeLive } from "../../../../server/liveRouter";
 
-const UNAVAILABLE = "메시지 형식 API 는 로컬 파일 폴더를 쓰기 때문에 이 서버에서는 쓸 수 없습니다.";
+const UNAVAILABLE = "실시간 현황판 서버 API 는 로컬 파일 폴더를 쓰기 때문에 이 서버에서는 쓸 수 없습니다.";
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -23,16 +25,18 @@ function dataDirFromModule(): string {
   return `${cleaned}.grid-projects`;
 }
 
-let storePromise: Promise<FormatStore | null> | null = null;
+let storePromise: Promise<LiveStore | null> | null = null;
 
-function loadStore(): Promise<FormatStore | null> {
+function loadStore(): Promise<LiveStore | null> {
   storePromise ??= (async () => {
     try {
       const { existsSync } = await import("node:fs");
-      const { createFormatStore } = await import("../../../../server/formatStore");
+      const { createLiveStore } = await import("../../../../server/liveApi");
       const dir = process.env.GRID_TILE_DATA_DIR || dataDirFromModule();
       if (!existsSync(dir)) return null;
-      return createFormatStore(dir);
+      // 브로커 구독은 여기서 하지 않는다. 상시 서비스의 라우트는 Cloudflare 호환 런타임에서 돌아 `net` 이 없다.
+      // 별도 프로세스 `scripts/live-logger.ts` 가 파일을 쓰고, 여기서는 그 파일만 읽는다.
+      return createLiveStore(dir, { logger: false });
     } catch {
       return null;
     }
@@ -41,7 +45,8 @@ function loadStore(): Promise<FormatStore | null> {
 }
 
 async function handle(request: Request): Promise<Response> {
-  const segments = parseLivePath(new URL(request.url).pathname);
+  const url = new URL(request.url);
+  const segments = parseLivePath(url.pathname);
   if (!segments) return json(404, { ok: false, error: "없는 주소입니다." });
 
   const store = await loadStore();
@@ -51,6 +56,7 @@ async function handle(request: Request): Promise<Response> {
     const { status, body } = await routeLive(store, {
       method: request.method,
       segments,
+      query: url.searchParams,
       body: async () => {
         const text = await request.text();
         if (!text) return {};

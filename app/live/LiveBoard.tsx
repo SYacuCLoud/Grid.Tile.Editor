@@ -15,7 +15,8 @@ import {
   EMPTY_LIVE,
   formatAgo,
   formatDwell,
-  ghostTtlMs,
+  GHOST_CHOICES,
+  ghostMinutesOf,
   ghostVisible,
   hasLiveFlash,
   LIVE_COLORS,
@@ -29,6 +30,8 @@ import {
 import { type LookupBook, type LookupSnapshot, pickSnapshot, resolveTag, tagLabel, tagLine } from "./lookup";
 import { loadFormatBook } from "./formatClient";
 import { FormatSettings } from "./FormatSettings";
+import { HistoryExport } from "./HistoryExport";
+import { ReaderHistory } from "./ReaderHistory";
 import { loadLookupBook, loadLookupConfig, type PublicLookupConfig, refreshLookup } from "./lookupClient";
 import { LookupSettings } from "./LookupSettings";
 import { type FormatBook, formatFor, isDefaultFormat, type MessageFormat } from "./messageFormat";
@@ -36,6 +39,17 @@ import { loadMqtt } from "./mqttLoader";
 
 /** 서버 도면을 다시 확인하는 간격. 편집기에서 칸을 옮기면 현황판도 따라와야 한다. */
 const REFRESH_MS = 30_000;
+/** 이 브라우저가 기억하는 잔상 유지 시간(분). 주소에 `ghost=` 가 없을 때 쓴다. */
+const GHOST_STORAGE_KEY = "grid-tile-editor:live:ghostMinutes";
+
+function readStoredGhost(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(GHOST_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
 /** 기준정보 스냅샷을 서버에서 다시 받는 간격. 서버가 DB 를 읽는 주기는 설정(refreshSeconds)이 따로 정한다. */
 const LOOKUP_MS = 60_000;
 
@@ -159,6 +173,8 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
   const [formatOpen, setFormatOpen] = useState(false);
   /** 프로필을 저장하면 브로커에 다시 붙어 retained 를 새 프로필로 다시 읽는다. */
   const [reconnectNonce, setReconnectNonce] = useState(0);
+  /** 식별 이력을 보고 있는 리더 id. 칸이나 목록 줄을 누르면 열린다. */
+  const [historyId, setHistoryId] = useState<string | null>(null);
   const revisionRef = useRef(-1);
 
   const brokerUrl = loc.broker ?? (typeof window === "undefined" ? "" : defaultBrokerUrl(window.location.hostname));
@@ -401,7 +417,17 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
   }, [hasSubject, readers, snapshotFor]);
 
   // 잔상 — 들어낸 태그의 이름을 유지 시간 동안 회색으로 남긴다. 시계(now)가 틱마다 바뀌므로 만료도 저절로 반영된다.
-  const ghostTtl = ghostTtlMs(loc.ghost);
+  // 유지 시간은 주소(`?ghost=`) → 이 브라우저에 저장한 값 → 기본(24시간) 순. 화면에서 바꾸면 둘 다에 적는다.
+  const ghostMinutes = ghostMinutesOf(loc.ghost ?? readStoredGhost());
+  const ghostTtl = ghostMinutes * 60_000;
+  const setGhostMinutes = (minutes: number) => {
+    try {
+      window.localStorage.setItem(GHOST_STORAGE_KEY, String(minutes));
+    } catch {
+      // 사설 창 등에서 저장이 막혀도 주소에는 남는다.
+    }
+    navigate({ ...loc, ghost: String(minutes) });
+  };
   const ghosts = useMemo(() => {
     const out: Record<string, string> = {};
     if (ghostTtl <= 0) return out;
@@ -421,6 +447,18 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
     setPageId(id);
     navigate({ ...loc, page: id });
   };
+
+  /** 칸을 누르면 그 자리의 리더 이력을 연다. 리더가 없는 칸은 아무 일도 없다. */
+  const onCellClick = (point: { x: number; y: number }) => {
+    const hit = match.placed.find((p) => p.cells.some((c) => c.x === point.x && c.y === point.y));
+    if (hit) setHistoryId(hit.reader.id);
+  };
+  const historyReader = historyId ? (model.readers[historyId] ?? null) : null;
+  const historyPlace = (() => {
+    if (!historyReader) return "";
+    const placed = match.placed.find((p) => p.reader.id === historyReader.id);
+    return placed ? `가로 ${placed.cells[0].x + 1} · 세로 ${placed.cells[0].y + 1}${placed.cells.length > 1 ? ` (+${placed.cells.length - 1})` : ""}` : "미배치";
+  })();
 
   const connectionView: Record<Connection, { text: string; color: string }> = {
     loading: { text: "mqtt.js 읽는 중", color: "#94a3b8" },
@@ -523,6 +561,24 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
           >
             형식 {formatIsDefault ? "v1" : "사용자 정의"}
           </button>
+          <label className="flex items-center gap-1 text-[11px] text-slate-400" title="태그를 들어낸 뒤 마지막 태그를 칸에 회색으로 남기는 시간. 이 브라우저와 주소(&ghost=분)에 기억됩니다.">
+            잔상
+            <select
+              className="rounded border border-slate-700 bg-slate-800 px-1 py-0.5 text-[11px] text-slate-200"
+              value={GHOST_CHOICES.some((c) => c.minutes === ghostMinutes) ? ghostMinutes : "custom"}
+              onChange={(e) => {
+                if (e.target.value !== "custom") setGhostMinutes(Number(e.target.value));
+              }}
+              aria-label="잔상 유지 시간"
+            >
+              {GHOST_CHOICES.map((c) => (
+                <option key={c.minutes} value={c.minutes}>
+                  {c.label}
+                </option>
+              ))}
+              {!GHOST_CHOICES.some((c) => c.minutes === ghostMinutes) ? <option value="custom">{ghostMinutes}분</option> : null}
+            </select>
+          </label>
         </div>
         <time className="shrink-0 font-mono text-lg tabular-nums text-slate-200" dateTime={new Date(now).toISOString()}>
           {new Date(now).toLocaleTimeString("ko-KR", { hour12: false })}
@@ -532,7 +588,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
       <div className="flex min-h-0 flex-1">
         <main className="relative min-w-0 flex-1 p-2">
           {doc ? (
-            <LiveCanvas key={`${opened?.id}:${page?.id}`} doc={doc} visible={visible} placed={match.placed} flashes={model.flashes} now={now} labels={labels} ghosts={ghosts} />
+            <LiveCanvas key={`${opened?.id}:${page?.id}`} doc={doc} visible={visible} placed={match.placed} flashes={model.flashes} now={now} labels={labels} ghosts={ghosts} onCellClick={onCellClick} />
           ) : (
             <p className="p-4 text-sm text-slate-400">{openError ?? "도면 읽는 중…"}</p>
           )}
@@ -623,11 +679,18 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
               <p className="mb-1 text-[11px] text-slate-400">이 페이지 칸에 자리가 없습니다. 편집기의 장치 대장에 S/N 으로 등록하고 칸에 연결하십시오.</p>
               <ul className="flex flex-col gap-1">
                 {match.unplaced.map((r) => (
-                  <li key={r.id} className="rounded-lg border border-dashed border-amber-500/40 px-2.5 py-1.5">
-                    <span className="block truncate font-semibold">{r.reader}</span>
-                    <span className="block truncate text-[11px] text-slate-400">
-                      S/N {r.serial || "-"} · {r.host} · {r.state}{hasSubject(r) ? ` · ${tagLine(snapshotFor(r.site), r as unknown as Record<string, unknown>)}` : ""}
-                    </span>
+                  <li key={r.id}>
+                    <button
+                      type="button"
+                      className="block w-full rounded-lg border border-dashed border-amber-500/40 px-2.5 py-1.5 text-left hover:bg-slate-800/70 focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-500"
+                      onClick={() => setHistoryId(r.id)}
+                      title="누르면 식별 이력"
+                    >
+                      <span className="block truncate font-semibold">{r.reader}</span>
+                      <span className="block truncate text-[11px] text-slate-400">
+                        S/N {r.serial || "-"} · {r.host} · {r.state}{hasSubject(r) ? ` · ${tagLine(snapshotFor(r.site), r as unknown as Record<string, unknown>)}` : ""}
+                      </span>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -636,6 +699,13 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
 
           <section>
             <h2 className="mb-1 text-[11px] font-semibold tracking-wide text-slate-400">리더 {match.placed.length}</h2>
+            <HistoryExport
+              site={loc.site}
+              placedIds={match.placed.map((p) => p.reader.id)}
+              title={`${opened?.project.title ?? loc.id ?? "도면"}${page && (opened?.project.pages.length ?? 0) > 1 ? `_${page.name}` : ""}`}
+              snapshotFor={snapshotFor}
+              now={now}
+            />
             <ul className="flex flex-col gap-1">
               {match.placed.map(({ reader, cells }) => {
                 const paint = readerPaint(reader, labels[reader.id], ghosts[reader.id]);
@@ -643,7 +713,13 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
                 const ghostText = ghosts[reader.id] ? `마지막 ${tagLine(snapshotFor(reader.site), reader.lastUid)} · ${formatAgo(reader.lastAt, now)}` : "";
                 const detail = tag ? tag.fields.map((f) => `${f.label}: ${f.value}`).join("\n") : "";
                 return (
-                  <li key={reader.id} className="flex items-center gap-2 rounded-lg bg-slate-800/70 px-2.5 py-1.5" title={detail ? `UID ${reader.uid}\n${detail}` : undefined}>
+                  <li key={reader.id}>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-lg bg-slate-800/70 px-2.5 py-1.5 text-left hover:bg-slate-700/70 focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-500"
+                      title={`${detail ? `UID ${reader.uid}\n${detail}\n` : ""}누르면 식별 이력`}
+                      onClick={() => setHistoryId(reader.id)}
+                    >
                     <span className="inline-block h-3 w-3 shrink-0 rounded-sm border" style={{ borderColor: paint.stroke, background: paint.fill ?? "transparent" }} aria-hidden="true" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-semibold">
@@ -657,6 +733,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
                       </span>
                       {ghostText ? <span className="block truncate text-[11px] text-slate-500">{ghostText}</span> : null}
                     </span>
+                    </button>
                   </li>
                 );
               })}
@@ -687,6 +764,10 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
           </section>
         </aside>
       </div>
+
+      {historyReader ? (
+        <ReaderHistory key={historyReader.id} reader={historyReader} place={historyPlace} snapshot={snapshotFor(historyReader.site)} now={now} onClose={() => setHistoryId(null)} />
+      ) : null}
 
       {formatOpen ? (
         <FormatSettings

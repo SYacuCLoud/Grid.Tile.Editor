@@ -226,7 +226,7 @@ async function call(api, method, url, body) {
 test("API: 목록 · 사업장(없으면 기본) · 저장 · 되돌리기, 다른 주소는 넘긴다", async () => {
   const { dir, cleanup } = freshDir();
   try {
-    const { middleware } = createLiveApi(dir, { log: () => {} });
+    const { middleware } = createLiveApi(dir, { log: () => {}, logger: false });
     assert.equal((await call(middleware, "GET", "/live")).passed, true);
 
     const empty = await call(middleware, "GET", "/api/live/format");

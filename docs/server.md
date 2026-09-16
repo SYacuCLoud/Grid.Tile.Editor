@@ -31,7 +31,12 @@
 │  ├─ connections.json               접속 이름 → env 파일 (관리자가 파일로만 관리 · 비밀은 env 에)
 │  └─ default.json                   사업장별 기준정보 매핑 (UID 열 ↔ 표시 열 · 조건 · 갱신 주기, `/live` 설정 창이 저장)
 └─ .live/
-   └─ {사업장}.json                  MQTT 메시지 형식 프로필 (필드 → JSON 경로 · 값 해석). 없으면 v1. `/live` 의 `형식` 단추가 저장
+   ├─ {사업장}.json                  MQTT 메시지 형식 프로필 (필드 → JSON 경로 · 값 해석). 없으면 v1. `/live` 의 `형식` 단추가 저장
+   ├─ logger.json                    (선택) 이벤트 기록기 설정 — broker · prefix · site · retentionDays · enabled
+   └─ events/
+      ├─ 2026-09-16.main.jsonl       상시 서비스 기록기(scripts/live-logger.ts)가 쓴 하루 이벤트
+      ├─ 2026-09-16.dev.jsonl        개발 서버가 쓴 것 (조회 시 id 로 겹침 제거)
+      └─ logger-status.json          별도 프로세스 기록기의 상태 (10초마다 갱신 · 30초 넘으면 죽은 것으로 봄)
 ```
 
 리비전 번호는 이력 파일 이름에서 읽습니다. 따로 관리하는 상태가 없으므로 폴더를 복사하거나 합쳐도 계산이 어긋나지 않습니다. 폴더를 옮길 때는 `.photos/` 도 함께 옮깁니다 — 없으면 스냅샷의 사진만 빠지고 도면 파일은 그대로입니다.
@@ -65,6 +70,8 @@
 | `GET` | `/api/live/format/:site` | 한 사업장 (파일이 없으면 기본 프로필을 `isDefault:true` 로) |
 | `PUT` | `/api/live/format/:site` | `{format, author}` 저장 (기본과 같으면 파일 삭제) |
 | `DELETE` | `/api/live/format/:site` | 기본(v1)으로 되돌리기 |
+| `GET` | `/api/live/events?site=&key=&hours=24&before=<ms>&limit=200` | 서버가 쌓은 등장 · 제거 이벤트, 최신부터. `before` 로 이전 구간을 이어 받음 |
+| `GET` | `/api/live/events/status` | 이벤트 로그(파일 수 · 오늘 크기) 와 기록기(접속 · 건수) 상태. 상시 서비스는 별도 프로세스의 상태 파일을 읽음(`external:true`) |
 
 용지 설정(`page.paper`)을 포함한 페이지 내용 전체가 서버 파일과 이력 스냅샷에 그대로 저장·복원됩니다.
 
@@ -88,7 +95,7 @@ Grid.Tile.Editor/
 ├─ app/            웹 앱 — editor/(편집기) · m/(모바일 보기) · live/(실시간 현황판) · api/projects/ · api/lookup/(상시 서비스용 라우트 — vinext start 는 Vite 미들웨어를 안 태움)
 ├─ server/         로컬 공유 API — 리비전 저장소 · /api/projects · 사진 분리 · Vite 플러그인
 ├─ mcp/            MCP 서버 — 진입점 · 저장소 · 도구(project · cells · palette · pages · preview · history)
-├─ scripts/        3100 상시 서비스(service.cmd · server-daemon.cmd) · 빌드 스탬프 · 이력 정리
+├─ scripts/        3100 상시 서비스(service.cmd · server-daemon.cmd) · 이벤트 기록기(live-logger.ts, 데몬이 서버와 함께 띄움) · 빌드 스탬프 · 이력 정리
 ├─ tests/          로직 · 서버 렌더 · MCP 도구 테스트
 ├─ docs/           이 문서들과 예시 그림
 ├─ .grid-projects/ 저장 폴더(도면 JSON · .history/ · .photos/) — 커밋하지 않음

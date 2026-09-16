@@ -1,20 +1,40 @@
 /**
- * `/api/live` 경로 규칙 — 실시간 현황판의 메시지 형식 프로필. Vite 미들웨어와 App Router 라우트가 함께 쓴다.
+ * `/api/live` 경로 규칙 — 실시간 현황판의 서버 쪽 일. Vite 미들웨어와 App Router 라우트가 함께 쓴다.
  *
- *   GET    /api/live/format                 사업장별 프로필 { sites: {…}, errors: {…} } (없는 사업장 = 기본 v1)
+ * 메시지 형식 프로필
+ *   GET    /api/live/format                 사업장별 프로필 { sites, errors } (없는 사업장 = 기본 v1)
  *   GET    /api/live/format/:site           한 사업장 (파일이 없으면 기본 프로필을 `isDefault:true` 로)
  *   PUT    /api/live/format/:site  {format, author}   저장(기본과 같으면 파일 삭제)
  *   DELETE /api/live/format/:site           기본으로 되돌리기
+ *
+ * 이벤트 로그 (서버가 브로커를 구독해 쌓은 등장 · 제거)
+ *   GET    /api/live/events?site=&key=&hours=24&before=<ms>&limit=200   최신부터. `before` 로 이전 구간을 이어 받는다
+ *   GET    /api/live/events/status          기록기 상태(접속 · 건수 · 파일)
  */
 
+import { join } from "node:path";
+
 import { defaultFormat, isDefaultFormat, MessageFormatError } from "../app/live/messageFormat";
+import type { EventLog } from "./eventLog";
+import { type EventLoggerHandle, readLoggerStatusFile } from "./eventLogger";
 import type { FormatStore } from "./formatStore";
 
 export const LIVE_API_BASE = "/api/live";
+/** 한 번에 조회하는 기본 범위(시간). */
+export const DEFAULT_EVENT_HOURS = 24;
+export const MAX_EVENT_HOURS = 24 * 31;
+
+export interface LiveStore {
+  formats: FormatStore;
+  events: EventLog;
+  /** 브로커 구독 기록기. 켜지 못한 자리(시험 · Worker)에서는 null. */
+  logger: EventLoggerHandle | null;
+}
 
 export interface LiveRequest {
   method: string;
   segments: string[];
+  query: URLSearchParams;
   body: () => Promise<unknown>;
 }
 
@@ -31,29 +51,59 @@ export function parseLivePath(pathname: string): string[] | null {
 
 const notFound = (): LiveResult => ({ status: 404, body: { ok: false, error: "없는 주소입니다." } });
 
-export async function routeLive(store: FormatStore, request: LiveRequest): Promise<LiveResult> {
+function num(value: string | null, fallback: number): number {
+  if (value === null || value.trim() === "") return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export async function routeLive(store: LiveStore, request: LiveRequest, now: () => number = () => Date.now()): Promise<LiveResult> {
   const method = request.method.toUpperCase();
-  const [area, site] = request.segments;
-  if (area !== "format") return notFound();
+  const [area, second] = request.segments;
 
-  if (!site) {
-    if (method !== "GET") return notFound();
-    return { status: 200, body: { dir: store.dir, ...store.book() } };
+  if (area === "format") {
+    const site = second;
+    if (!site) {
+      if (method !== "GET") return notFound();
+      return { status: 200, body: { dir: store.formats.dir, ...store.formats.book() } };
+    }
+    if (method === "GET") {
+      const format = store.formats.get(site);
+      return { status: 200, body: { format: format ?? defaultFormat(site), isDefault: format === null || isDefaultFormat(format) } };
+    }
+    if (method === "PUT") {
+      const body = (await request.body()) as { format?: unknown; author?: string };
+      const saved = store.formats.save(site, body.format, typeof body.author === "string" ? body.author : "");
+      return { status: 200, body: { ok: true, format: saved, isDefault: isDefaultFormat(saved) } };
+    }
+    if (method === "DELETE") {
+      store.formats.remove(site);
+      return { status: 200, body: { ok: true, format: defaultFormat(site), isDefault: true } };
+    }
+    return notFound();
   }
 
-  if (method === "GET") {
-    const format = store.get(site);
-    return { status: 200, body: { format: format ?? defaultFormat(site), isDefault: format === null || isDefaultFormat(format) } };
+  if (area === "events" && method === "GET") {
+    if (second === "status") {
+      // 기록기가 이 프로세스에 없으면(상시 서비스) 별도 프로세스가 남긴 상태 파일을 읽는다.
+      const logger = store.logger?.status() ?? readLoggerStatusFile(join(store.events.dir, "logger-status.json"), now());
+      return { status: 200, body: { log: store.events.status(), logger, external: !store.logger } };
+    }
+    if (second) return notFound();
+    const q = request.query;
+    const toMs = num(q.get("before"), now());
+    const hours = Math.min(MAX_EVENT_HOURS, Math.max(1, num(q.get("hours"), DEFAULT_EVENT_HOURS)));
+    const fromMs = toMs - hours * 3_600_000;
+    const result = store.events.query({
+      site: q.get("site")?.trim() || undefined,
+      key: q.get("key")?.trim() || undefined,
+      fromMs,
+      toMs,
+      limit: num(q.get("limit"), 200),
+    });
+    return { status: 200, body: { ...result, hours } };
   }
-  if (method === "PUT") {
-    const body = (await request.body()) as { format?: unknown; author?: string };
-    const saved = store.save(site, body.format, typeof body.author === "string" ? body.author : "");
-    return { status: 200, body: { ok: true, format: saved, isDefault: isDefaultFormat(saved) } };
-  }
-  if (method === "DELETE") {
-    store.remove(site);
-    return { status: 200, body: { ok: true, format: defaultFormat(site), isDefault: true } };
-  }
+
   return notFound();
 }
 
