@@ -143,10 +143,10 @@ export function drawOverlay(
       const cx = (minX + maxX) / 2;
       const top = (minY + maxY) / 2 - ((box.lines.length - 1) * box.lineHeight) / 2;
       if (paint.ghost) {
-        // 잔상 — 마지막에 있던 태그. 흰 바탕 위 회색 · 반투명. 채움도 테두리 강조도 없어 "지금은 없다" 가 먼저 읽힌다.
-        ctx.globalAlpha = 0.55;
-        ctx.lineWidth = Math.max(2, box.fontSize * 0.22);
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+        // 잔상 — 마지막에 있던 태그. 옅은 회색 채움 위에 진한 회색 글자와 흰 테. 태그 있음(녹색 위 흰 글씨)과 갈리되 멀리서도 읽힌다.
+        ctx.globalAlpha = 0.9;
+        ctx.lineWidth = Math.max(2, box.fontSize * 0.28);
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
         box.lines.forEach((line, index) => {
           const cy = top + index * box.lineHeight;
           ctx.strokeText(line, cx, cy);

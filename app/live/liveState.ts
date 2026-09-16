@@ -401,8 +401,10 @@ export const LIVE_COLORS = {
   offline: "#6b7280",
   appear: "#22c55e",
   remove: "#f97316",
-  /** 잔상 글자. 흰 글씨(태그 있음)와 갈리게 회색. */
-  ghost: "#64748b",
+  /** 잔상 글자. 흰 글씨(태그 있음)와 갈리게 진한 회색 — 벽걸이 거리에서도 읽혀야 한다. */
+  ghost: "#334155",
+  /** 잔상 칸의 옅은 채움. */
+  ghostFill: "#94a3b8",
 } as const;
 
 export interface ReaderPaint {
@@ -431,7 +433,8 @@ export function readerPaint(reader: ReaderState, label?: string, ghostLabel?: st
     return { fill: LIVE_COLORS.present, fillAlpha: 0.45, stroke: LIVE_COLORS.present, strokeWidth: 2, dashed: false, text: label || shortUid(reader.uid), ghost: false };
   }
   if (ghostLabel) {
-    return { fill: null, fillAlpha: 0, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: ghostLabel, ghost: true };
+    // 잔상 칸은 옅은 회색으로 살짝 채워 "비었지만 방금 무엇이 있었다" 가 한눈에 갈리게 한다.
+    return { fill: LIVE_COLORS.ghostFill, fillAlpha: 0.35, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: ghostLabel, ghost: true };
   }
   return { fill: null, fillAlpha: 0, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: "", ghost: false };
 }

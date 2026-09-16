@@ -70,7 +70,7 @@ test("잔상: 태그를 들어내면 마지막 UID 가 남고, 새 태그가 오
   const ghostPaint = readerPaint({ ...r, present: false }, undefined, "통번호 129");
   assert.equal(ghostPaint.ghost, true);
   assert.equal(ghostPaint.text, "통번호 129");
-  assert.equal(ghostPaint.fill, null);
+  assert.equal(ghostPaint.fill, "#94a3b8", "잔상 칸은 옅은 회색 채움");
   assert.equal(readerPaint({ ...r, present: false }).ghost, false, "잔상 글자를 안 넘기면 빈 칸 그대로");
 });
 
