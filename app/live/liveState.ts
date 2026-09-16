@@ -63,8 +63,18 @@ export interface ReaderState {
   lastSeenAt: number;
 }
 
-/** 잔상 기본 유지 시간(분). 주소의 `?ghost=분` 으로 바꾼다. 0 이면 끔. */
-export const DEFAULT_GHOST_MINUTES = 20;
+/** 잔상 기본 유지 시간(분) — 하루. 화면의 `잔상` 선택이나 주소의 `?ghost=분` 으로 바꾼다. 0 이면 끔. */
+export const DEFAULT_GHOST_MINUTES = 1440;
+
+/** 화면에서 고를 수 있는 잔상 유지 시간. */
+export const GHOST_CHOICES: { minutes: number; label: string }[] = [
+  { minutes: 0, label: "끔" },
+  { minutes: 20, label: "20분" },
+  { minutes: 60, label: "1시간" },
+  { minutes: 480, label: "8시간" },
+  { minutes: 1440, label: "24시간" },
+  { minutes: 4320, label: "3일" },
+];
 
 export interface HostStatus {
   id: string;
@@ -283,12 +293,17 @@ export function ghostVisible(reader: ReaderState, now: number, ttlMs: number): b
   return now - reader.lastSeenAt <= ttlMs;
 }
 
-/** 주소의 `?ghost=분` → ms. 없으면 기본, 숫자가 아니면 기본, 음수는 0. */
-export function ghostTtlMs(param: string | null): number {
-  if (param === null || param.trim() === "") return DEFAULT_GHOST_MINUTES * 60_000;
+/** `분` 글자(주소 · 저장값) → 분. 없거나 숫자가 아니면 기본, 음수는 0. */
+export function ghostMinutesOf(param: string | null | undefined): number {
+  if (param === null || param === undefined || param.trim() === "") return DEFAULT_GHOST_MINUTES;
   const minutes = Number(param);
-  if (!Number.isFinite(minutes)) return DEFAULT_GHOST_MINUTES * 60_000;
-  return Math.max(0, minutes) * 60_000;
+  if (!Number.isFinite(minutes)) return DEFAULT_GHOST_MINUTES;
+  return Math.max(0, Math.round(minutes));
+}
+
+/** 주소의 `?ghost=분` → ms. */
+export function ghostTtlMs(param: string | null): number {
+  return ghostMinutesOf(param) * 60_000;
 }
 
 /** 잔상의 남은 진하기(1 → 0). 끝났으면 0. */
@@ -418,25 +433,50 @@ export interface ReaderPaint {
   text: string;
   /** 글자가 잔상(마지막에 있던 태그)인가. 회색 · 반투명으로 그린다. */
   ghost: boolean;
+  /** 제목 바로 아래 작은 글자 — 인식된 뒤(또는 들어낸 뒤) 지난 시간. 없으면 빈 문자열. */
+  sub: string;
 }
 
 /**
  * 리더 상태 → 칸을 어떻게 그릴지.
  * `label` 을 주면 칸 글자로 그것을 쓴다(기준정보에서 찾은 실물 이름). 없으면 짧은 UID.
  * `ghostLabel` 은 비어 있는 칸에 남길 잔상 글자. 부르는 쪽이 `ghostVisible` 로 걸러 넘긴다.
+ * `now` 를 주면 제목 아래에 지난 시간(초 단위로 흐름)을 붙인다 — 태그가 있으면 인식된 뒤, 잔상이면 들어낸 뒤.
  */
-export function readerPaint(reader: ReaderState, label?: string, ghostLabel?: string): ReaderPaint {
+export function readerPaint(reader: ReaderState, label?: string, ghostLabel?: string, now?: number): ReaderPaint {
   if (!reader.online) {
-    return { fill: LIVE_COLORS.offline, fillAlpha: 0.35, stroke: LIVE_COLORS.offline, strokeWidth: 1.5, dashed: true, text: "", ghost: false };
+    return { fill: LIVE_COLORS.offline, fillAlpha: 0.35, stroke: LIVE_COLORS.offline, strokeWidth: 1.5, dashed: true, text: "", ghost: false, sub: "" };
   }
   if (reader.present) {
-    return { fill: LIVE_COLORS.present, fillAlpha: 0.45, stroke: LIVE_COLORS.present, strokeWidth: 2, dashed: false, text: label || shortUid(reader.uid), ghost: false };
+    const sub = now === undefined ? "" : formatElapsed(elapsedMs(reader.at, reader.receivedAt, now));
+    return { fill: LIVE_COLORS.present, fillAlpha: 0.45, stroke: LIVE_COLORS.present, strokeWidth: 2, dashed: false, text: label || shortUid(reader.uid), ghost: false, sub };
   }
   if (ghostLabel) {
     // 잔상 칸은 옅은 회색으로 살짝 채워 "비었지만 방금 무엇이 있었다" 가 한눈에 갈리게 한다.
-    return { fill: LIVE_COLORS.ghostFill, fillAlpha: 0.35, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: ghostLabel, ghost: true };
+    const sub = now === undefined ? "" : formatElapsed(elapsedMs(reader.lastAt, reader.lastSeenAt, now));
+    return { fill: LIVE_COLORS.ghostFill, fillAlpha: 0.35, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: ghostLabel, ghost: true, sub };
   }
-  return { fill: null, fillAlpha: 0, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: "", ghost: false };
+  return { fill: null, fillAlpha: 0, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: "", ghost: false, sub: "" };
+}
+
+/**
+ * 어떤 시각부터 지금까지(ms). 발행 쪽 시각(ISO)을 먼저 쓰고, 못 읽으면 브라우저가 받은 시각으로.
+ * 감시 PC 시계가 앞서 있어 음수가 나오면 0.
+ */
+export function elapsedMs(iso: string, fallbackMs: number, now: number): number {
+  const t = iso ? Date.parse(iso) : Number.NaN;
+  const base = Number.isFinite(t) ? t : fallbackMs;
+  return Math.max(0, now - base);
+}
+
+/** 칸에 적을 경과 시간. `00:45` · `03:12` · 한 시간을 넘으면 `1:05:03`. 초 단위로 흐른다. */
+export function formatElapsed(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const hour = Math.floor(sec / 3600);
+  const min = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return hour > 0 ? `${hour}:${pad(min)}:${pad(s)}` : `${pad(min)}:${pad(s)}`;
 }
 
 // ------------------------------------------------------------ 칸 글자 맞추기

@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState } from "react";
-import type { LayoutDoc } from "../editor/doc";
+import type { LayoutDoc, Point } from "../editor/doc";
 import type { LayerId } from "../editor/palette";
 import { renderDoc } from "../editor/render";
 import { fitCell, MAX_CANVAS_PX } from "../m/mobileView";
@@ -18,6 +18,8 @@ interface LiveCanvasProps {
   labels?: Record<string, string>;
   /** 리더 id → 잔상 글자(마지막에 있던 태그). 유지 시간 안의 것만 들어 있다. */
   ghosts?: Record<string, string>;
+  /** 칸을 눌렀을 때. 도면 좌표(가로 · 세로 0부터). */
+  onCellClick?: (point: Point) => void;
 }
 
 /**
@@ -29,7 +31,7 @@ interface LiveCanvasProps {
  * 다시 그려야 한다.
  */
 export function LiveCanvas(props: LiveCanvasProps) {
-  const { doc, visible, placed, flashes, now, labels, ghosts } = props;
+  const { doc, visible, placed, flashes, now, labels, ghosts, onCellClick } = props;
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const baseRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
@@ -83,12 +85,27 @@ export function LiveCanvas(props: LiveCanvasProps) {
   return (
     <div ref={wrapRef} className="relative h-full w-full">
       <div className="absolute" style={{ left: Math.max(0, (size.width - canvasW) / 2), top: Math.max(0, (size.height - canvasH) / 2) }}>
-        <canvas ref={baseRef} className="block bg-white" />
+        <canvas
+          ref={baseRef}
+          className={`block bg-white ${onCellClick ? "cursor-pointer" : ""}`}
+          onClick={(event) => {
+            if (!onCellClick || cell <= 0) return;
+            const rect = event.currentTarget.getBoundingClientRect();
+            const x = Math.floor((event.clientX - rect.left) / cell);
+            const y = Math.floor((event.clientY - rect.top) / cell);
+            if (x < 0 || y < 0 || x >= doc.cols || y >= doc.rows) return;
+            onCellClick({ x, y });
+          }}
+        />
         <canvas ref={overlayRef} className="pointer-events-none absolute inset-0 block" aria-hidden="true" />
       </div>
     </div>
   );
 }
+
+const SUB_FONT = "system-ui, 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+/** 경과 시간 줄을 넣고도 제목 한 줄(최소 글자 7px × 1.15)이 들어갈 최소 높이(px). */
+const MIN_TITLE_ROOM = 8;
 
 /**
  * 리더가 놓인 칸마다 상태 색과 실물 이름(또는 UID), 방금 일어난 이벤트의 잔상을 얹는다.
@@ -107,7 +124,7 @@ export function drawOverlay(
   ghosts?: Record<string, string>,
 ) {
   for (const { reader, cells } of placed) {
-    const paint = readerPaint(reader, labels?.[reader.id], ghosts?.[reader.id]);
+    const paint = readerPaint(reader, labels?.[reader.id], ghosts?.[reader.id], now);
     let minX = Number.POSITIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
@@ -135,13 +152,19 @@ export function drawOverlay(
     }
 
     if (paint.text && cell >= 14 && cells.length > 0) {
-      const box = fitLabel(ctx, paint.text, shortUid(paint.ghost ? reader.lastUid : reader.uid), maxX - minX - 4, maxY - minY - 4, cell);
+      // 제목 아래 경과 시간 줄. 칸이 낮으면(한 줄 높이도 빠듯하면) 생략한다.
+      const boxH = maxY - minY - 4;
+      const subSize = Math.max(7, Math.min(cell * 0.22, 12));
+      const subLine = subSize * 1.2;
+      const showSub = paint.sub !== "" && boxH >= subLine + MIN_TITLE_ROOM;
+      const box = fitLabel(ctx, paint.text, shortUid(paint.ghost ? reader.lastUid : reader.uid), maxX - minX - 4, boxH - (showSub ? subLine : 0), cell);
       ctx.font = box.font;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.lineJoin = "round";
       const cx = (minX + maxX) / 2;
-      const top = (minY + maxY) / 2 - ((box.lines.length - 1) * box.lineHeight) / 2;
+      const blockH = box.lines.length * box.lineHeight + (showSub ? subLine : 0);
+      const top = (minY + maxY) / 2 - blockH / 2 + box.lineHeight / 2;
       if (paint.ghost) {
         // 잔상 — 마지막에 있던 태그. 옅은 회색 채움 위에 진한 회색 글자와 흰 테. 태그 있음(녹색 위 흰 글씨)과 갈리되 멀리서도 읽힌다.
         ctx.globalAlpha = 0.9;
@@ -163,6 +186,18 @@ export function drawOverlay(
           ctx.fillStyle = "#ffffff";
           ctx.fillText(line, cx, cy);
         });
+      }
+      if (showSub) {
+        // 경과 시간 — 제목보다 작고 옅게. 태그 있음은 흰 글씨, 잔상은 회색.
+        const cy = top + (box.lines.length - 1) * box.lineHeight + box.lineHeight / 2 + subLine / 2;
+        ctx.font = `600 ${subSize}px ${SUB_FONT}`;
+        ctx.globalAlpha = paint.ghost ? 0.85 : 0.95;
+        ctx.lineWidth = Math.max(1.5, subSize * 0.25);
+        ctx.strokeStyle = paint.ghost ? "rgba(255, 255, 255, 0.95)" : "rgba(15, 23, 42, 0.8)";
+        ctx.strokeText(paint.sub, cx, cy);
+        ctx.fillStyle = paint.ghost ? LIVE_COLORS.ghost : "#ffffff";
+        ctx.fillText(paint.sub, cx, cy);
+        ctx.globalAlpha = 1;
       }
     }
 

@@ -11,11 +11,15 @@ import { linkDeviceToCell, upsertDeviceInProject } from "../app/editor/device.ts
 import {
   applyMessage,
   defaultBrokerUrl,
+  elapsedMs,
   EMPTY_LIVE,
   FLASH_MS,
   flashAlpha,
   formatAgo,
+  formatElapsed,
   formatDwell,
+  GHOST_CHOICES,
+  ghostMinutesOf,
   ghostTtlMs,
   ghostVisible,
   hasLiveFlash,
@@ -72,6 +76,21 @@ test("잔상: 태그를 들어내면 마지막 UID 가 남고, 새 태그가 오
   assert.equal(ghostPaint.text, "통번호 129");
   assert.equal(ghostPaint.fill, "#94a3b8", "잔상 칸은 옅은 회색 채움");
   assert.equal(readerPaint({ ...r, present: false }).ghost, false, "잔상 글자를 안 넘기면 빈 칸 그대로");
+
+  // 제목 아래 경과 시간 — 태그 있음은 인식된 뒤(상태 시각 기준), 잔상은 들어낸 뒤.
+  const presentAt = Date.parse("2026-09-14T15:32:32.931+09:00");
+  const live = applyMessage(EMPTY_LIVE, "rfid/s/reader/RR657-005592/state", STATE_PRESENT, t0).readers[id];
+  assert.equal(readerPaint(live, "통번호 129", undefined, presentAt + 45_000).sub, "00:45");
+  assert.equal(readerPaint(live, "통번호 129", undefined, presentAt + 192_000).sub, "03:12");
+  assert.equal(readerPaint(live, "통번호 129").sub, "", "now 를 안 주면 붙이지 않는다");
+  const removedAt = Date.parse("2026-09-14T15:32:40.000+09:00");
+  assert.equal(readerPaint({ ...r, present: false }, undefined, "통번호 129", removedAt + 5_000).sub, "00:05");
+  assert.equal(readerPaint({ ...r, present: false }, undefined, undefined, removedAt + 5_000).sub, "", "잔상이 없으면 경과도 없다");
+  // 감시 PC 시계가 앞서 있어도 음수는 안 나온다. 시각을 못 읽으면 받은 시각으로.
+  assert.equal(formatElapsed(-5000), "00:00");
+  assert.equal(elapsedMs("이상한 시각", 1000, 61_000), 60_000);
+  assert.equal(formatElapsed(3_903_000), "1:05:03", "한 시간을 넘으면 시:분:초");
+  assert.equal(formatElapsed(2 * 86_400_000 + 3 * 3_600_000), "51:00:00", "하루를 넘어도 시간으로 이어 센다");
 });
 
 test("잔상: 화면을 늦게 켜도 발행 쪽 lastUid 나 제거 이벤트로 채운다", () => {
@@ -94,12 +113,16 @@ test("잔상: 화면을 늦게 켜도 발행 쪽 lastUid 나 제거 이벤트로
   assert.equal(b.readers[id].lastUid, "E0040150ABCDEF01");
 
   // 주소 매개변수 → 유지 시간.
-  assert.equal(ghostTtlMs(null), 20 * 60_000);
-  assert.equal(ghostTtlMs(""), 20 * 60_000);
+  assert.equal(ghostTtlMs(null), 1440 * 60_000, "기본 24시간");
+  assert.equal(ghostTtlMs(""), 1440 * 60_000);
   assert.equal(ghostTtlMs("5"), 5 * 60_000);
   assert.equal(ghostTtlMs("0"), 0);
   assert.equal(ghostTtlMs("-3"), 0);
-  assert.equal(ghostTtlMs("abc"), 20 * 60_000);
+  assert.equal(ghostTtlMs("abc"), 1440 * 60_000);
+  assert.equal(ghostMinutesOf("60"), 60);
+  assert.equal(ghostMinutesOf("2.6"), 3, "분은 정수로");
+  assert.equal(ghostMinutesOf(undefined), 1440);
+  assert.ok(GHOST_CHOICES.some((c) => c.minutes === 1440), "기본값이 선택지에 있다");
 });
 
 test("토픽 해석: reader/state · reader/event · host/status, 다른 것은 null", () => {
