@@ -11,6 +11,7 @@ import { ZONE_LAYER_ID } from "../editor/zone";
 import { LiveCanvas } from "./LiveCanvas";
 import {
   applyMessage,
+  clockWarning,
   defaultBrokerUrl,
   EMPTY_LIVE,
   formatAgo,
@@ -24,6 +25,7 @@ import {
   matchReaders,
   pruneFlashes,
   readerPaint,
+  readerSkews,
   type ReaderState,
   subscriptionTopics,
 } from "./liveState";
@@ -340,10 +342,12 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
           setConnection("error");
           setConnectionError(err.message);
         });
-        client.on("message", (topic, payload) => {
+        client.on("message", (topic, payload, packet) => {
           const at = Date.now();
           const book = formatsRef.current;
-          setModel((m) => applyMessage(m, topic, payload.toString(), at, book));
+          // 구독 직후 되돌아오는 retained 는 묵은 메시지 — 시계 편차의 근거로 쓰지 않는다.
+          const retained = packet.retain === true;
+          setModel((m) => applyMessage(m, topic, payload.toString(), at, book, { retained }));
         });
       })
       .catch((e: unknown) => {
@@ -390,6 +394,9 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
   const hosts = useMemo(() => Object.values(model.hosts).sort((a, b) => a.host.localeCompare(b.host)), [model.hosts]);
   const presentCount = match.placed.filter((p) => p.reader.present).length;
   const offlineCount = readers.filter((r) => !r.online).length;
+  // 감시 PC 시계 편차. 하트비트로 잰 값을 리더별로 펴 두고, 칸의 경과 시간 · "n초 전" 을 이만큼 보정한다.
+  const skews = useMemo(() => readerSkews(model.readers, model.hosts), [model.hosts, model.readers]);
+  const skewedHosts = useMemo(() => hosts.filter((h) => h.online && clockWarning(h.skewMs) !== ""), [hosts]);
 
   // 리더의 사업장에 맞는 스냅샷. 사업장을 안 정한 화면(`site=`)은 리더마다 다를 수 있다.
   const snapshotFor = useCallback((site: string): LookupSnapshot | null => pickSnapshot(book, site), [book]);
@@ -588,7 +595,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
       <div className="flex min-h-0 flex-1">
         <main className="relative min-w-0 flex-1 p-2">
           {doc ? (
-            <LiveCanvas key={`${opened?.id}:${page?.id}`} doc={doc} visible={visible} placed={match.placed} flashes={model.flashes} now={now} labels={labels} ghosts={ghosts} onCellClick={onCellClick} />
+            <LiveCanvas key={`${opened?.id}:${page?.id}`} doc={doc} visible={visible} placed={match.placed} flashes={model.flashes} now={now} labels={labels} ghosts={ghosts} skews={skews} onCellClick={onCellClick} />
           ) : (
             <p className="p-4 text-sm text-slate-400">{openError ?? "도면 읽는 중…"}</p>
           )}
@@ -605,6 +612,16 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
             <Stat label="배치된 리더" value={match.placed.length} color={LIVE_COLORS.empty} />
             <Stat label="오프라인" value={offlineCount} color={offlineCount > 0 ? LIVE_COLORS.remove : LIVE_COLORS.offline} />
           </section>
+          {skewedHosts.length > 0 ? (
+            <p
+              className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200"
+              title="감시 PC 의 하트비트 시각과 이 화면의 시계를 비교한 값입니다. 칸의 경과 시간은 보정해 보이지만 식별 이력 · CSV 의 시각은 그 PC 시계 그대로입니다. 감시 PC 를 같은 시각 서버(NTP)에 맞추십시오."
+            >
+              <span className="font-semibold">시계 어긋난 감시 PC {skewedHosts.length}</span>
+              {" · "}
+              {skewedHosts.map((h) => `${h.host} ${clockWarning(h.skewMs)}`).join(" · ")}
+            </p>
+          ) : null}
 
           <section>
             <h2 className="mb-1 text-[11px] font-semibold tracking-wide text-slate-400">기준정보 (UID → 실물)</h2>
@@ -662,9 +679,19 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
                 <li key={h.id} className="flex items-center gap-2 rounded-lg bg-slate-800/70 px-2.5 py-1.5">
                   <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: h.online ? LIVE_COLORS.present : LIVE_COLORS.remove }} aria-hidden="true" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-semibold">{h.host}</span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="truncate font-semibold">{h.host}</span>
+                      {h.online && clockWarning(h.skewMs) ? (
+                        <span
+                          className="shrink-0 rounded bg-amber-500/20 px-1.5 py-px text-[10px] font-semibold text-amber-300"
+                          title={`이 PC 의 시계가 이 화면보다 ${h.skewMs !== null && h.skewMs > 0 ? "앞섭니다" : "늦습니다"}. 이벤트 시각 · 이력 순서가 그만큼 어긋납니다.`}
+                        >
+                          {clockWarning(h.skewMs)}
+                        </span>
+                      ) : null}
+                    </span>
                     <span className="block truncate text-[11px] text-slate-400">
-                      {h.online ? `리더 ${h.onlineReaders}/${h.readerCount} · 오늘 ${h.appearToday}↑ ${h.removeToday}↓ · ${formatAgo(h.time, now)}` : "오프라인 (브로커 유언)"}
+                      {h.online ? `리더 ${h.onlineReaders}/${h.readerCount} · 오늘 ${h.appearToday}↑ ${h.removeToday}↓ · ${formatAgo(h.time, now, h.skewMs ?? 0)}` : "오프라인 (브로커 유언)"}
                       {h.site && loc.site === "" ? ` · ${h.site}` : ""}
                     </span>
                   </span>
@@ -710,7 +737,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
               {match.placed.map(({ reader, cells }) => {
                 const paint = readerPaint(reader, labels[reader.id], ghosts[reader.id]);
                 const tag = hasSubject(reader) ? resolveTag(snapshotFor(reader.site), reader as unknown as Record<string, unknown>) : null;
-                const ghostText = ghosts[reader.id] ? `마지막 ${tagLine(snapshotFor(reader.site), reader.lastUid)} · ${formatAgo(reader.lastAt, now)}` : "";
+                const ghostText = ghosts[reader.id] ? `마지막 ${tagLine(snapshotFor(reader.site), reader.lastUid)} · ${formatAgo(reader.lastAt, now, skews[reader.id] ?? 0)}` : "";
                 const detail = tag ? tag.fields.map((f) => `${f.label}: ${f.value}`).join("\n") : "";
                 return (
                   <li key={reader.id}>

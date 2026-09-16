@@ -302,6 +302,7 @@
 - **이벤트 로그(서버)** — 별도 프로세스 `scripts/live-logger.ts` 가 브로커의 `…/reader/+/event` 를 구독해 `.grid-projects/.live/events/YYYY-MM-DD.<표시>.jsonl` 로 하루 한 파일씩 쌓습니다(기본 30일 보관). 상시 서비스 데몬이 서버와 함께 띄우고 함께 멈춥니다. 개발 서버는 같은 코드를 프로세스 안에서 돌려 `…dev.jsonl` 에 적고, 조회할 때 두 파일의 겹친 이벤트는 하나로 합칩니다. 브로커 주소 · 보관 일수는 `.grid-projects/.live/logger.json` (`{"broker":"mqtt://127.0.0.1:1883","prefix":"rfid","retentionDays":30}`), 상태는 `/api/live/events/status`. 상시 서비스의 라우트는 Cloudflare 호환 런타임에서 돌아 `net` 이 없기 때문에 웹 서버 자신이 구독하지 않고 파일만 읽습니다.
 - **잔상** — 태그를 들어낸 칸에는 **마지막에 있던 태그**가 회색 반투명 글자로 기본 **24시간** 남고, 리더 목록에도 `마지막 통번호 129 · 12분 전` 이 붙습니다. 다음 태그가 오면 사라집니다. 머리줄의 `잔상` 선택(끔 · 20분 · 1시간 · 8시간 · 24시간 · 3일)으로 바꾸면 이 브라우저에 기억되고 주소에도 `&ghost=분` 으로 실립니다(주소가 있으면 주소가 우선 — 벽걸이 PC 는 즐겨찾기로 고정). `ghost=0` 이면 끕니다. 화면을 늦게 켜면 첫 제거를 본 뒤부터 쌓입니다 — 발행 쪽이 상태에 선택 필드 `lastUid` · `lastTime` 을 실어 주면 즉시 채워집니다.
 - **오른쪽 패널** — 태그 감지 · 배치된 리더 · 오프라인 수, 감시 PC 별 online/offline(브로커 유언으로 끊김을 바로 안다) 과 오늘 건수, 리더 목록, 최근 이벤트(등장 · 제거 · 체류 시간).
+- **시계 편차** — 감시 PC 여러 대의 이벤트 시각이 한 화면에 섞이므로 PC 시계가 어긋나면 순서 · 경과 시간이 그대로 틀립니다. 현황판은 살아서 오는 하트비트(`…/host/{host}/status` 의 `time`)를 받은 순간의 자기 시계와 비교해 PC 별 편차를 재고, 30초를 넘으면 감시 PC 줄에 `시계 +3분`(PC 가 앞섬) · `시계 -45초`(늦음) 배지와 패널 위에 주황 띠를 붙입니다. 칸의 경과 시간과 `n초 전` 은 이 편차만큼 보정해 보이지만, 식별 이력 · CSV · 이벤트 로그의 시각은 그 PC 시계 그대로입니다 — 근본 해법은 감시 PC 를 같은 시각 서버(NTP · 도메인)에 맞추는 것이고 배지는 그것이 풀렸음을 알리는 신호입니다. 기준은 현황판을 보는 브라우저의 시계이므로 모든 PC 가 같은 방향으로 어긋나 보이면 그 브라우저를 의심하십시오. 구독 직후 되돌아오는 retained 하트비트와 유언(`online:false`)은 편차 계산에 쓰지 않습니다.
 - **도면 따라오기** — 30초마다 서버 리비전을 확인해 편집기에서 리더를 옮기면 현황판도 옮깁니다. 페이지가 여럿이면 위 칩으로 고릅니다.
 - **주소** — `/live?id=<도면 id>&page=<페이지 id>` 를 벽걸이 PC 의 즐겨찾기에 둡니다. 편집기 도구 막대의 `실시간 현황판 ↗` 이 지금 열린 도면 · 페이지의 이 주소를 새 탭으로 엽니다.
 - mqtt.js 는 번들에 넣지 않고 `public/vendor/mqtt.min.js` 를 브라우저에서 늦게 읽습니다(사내망에서도 돌아야 하니 CDN 은 쓰지 않습니다). 판을 올리려면 `npm run vendor:mqtt`.
@@ -314,7 +315,7 @@
 |---|---|
 | `{prefix}/{site}/reader/{key}/state` (retained) | `serial` 로 장치 대장을 찾고(없으면 토픽의 `{key}`), `present` · `online` 으로 칸 색, `uid` 를 칸에 적음, `reader`(없으면 `alias` → `readerName`) · `host` · `state` · `time` 은 오른쪽 목록에 표시. 빈 페이로드는 그 리더를 지운 것 |
 | `{prefix}/{site}/reader/{key}/event` | `kind`(`APPEAR` / `REMOVE`) 로 잔상 색, `time` · `reader` · `uid` · `dwellMs`(REMOVE) 를 최근 이벤트에. `time` + 토픽 + `kind` 가 같으면 재전송으로 보고 한 번만 |
-| `{prefix}/{site}/host/{host}/status` (retained + LWT) | `online` 으로 감시 PC 점 색, `time` · `readerCount` · `onlineReaders` · `appearToday` · `removeToday` 를 타일에 |
+| `{prefix}/{site}/host/{host}/status` (retained + LWT) | `online` 으로 감시 PC 점 색, `time` · `readerCount` · `onlineReaders` · `appearToday` · `removeToday` 를 타일에. 살아서 온(retained 아닌) 하트비트의 `time` 과 받은 순간의 차이가 그 PC 의 **시계 편차** |
 
 ```json
 {"v":1,"type":"state","time":"2026-09-14T15:32:32.931+09:00","host":"PC-LINE1","reader":"1번 저울","alias":"1번 저울","readerName":"ACS ACR1552 1S CL Reader PICC 0","serial":"RR657-005592","present":true,"online":true,"uid":"E0040150ABCDEF01","tech":"ISO 15693","state":"PRESENT"}

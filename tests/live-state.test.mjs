@@ -10,6 +10,8 @@ import { createProject, updateEquipmentInfoOnPage } from "../app/editor/doc.ts";
 import { linkDeviceToCell, upsertDeviceInProject } from "../app/editor/device.ts";
 import {
   applyMessage,
+  CLOCK_SKEW_WARN_MS,
+  clockWarning,
   defaultBrokerUrl,
   elapsedMs,
   EMPTY_LIVE,
@@ -18,6 +20,7 @@ import {
   formatAgo,
   formatElapsed,
   formatDwell,
+  formatSkew,
   GHOST_CHOICES,
   ghostMinutesOf,
   ghostTtlMs,
@@ -28,6 +31,7 @@ import {
   parseTopic,
   pruneFlashes,
   readerPaint,
+  readerSkews,
   shortUid,
   subscriptionTopics,
 } from "../app/live/liveState.ts";
@@ -265,4 +269,60 @@ test("글자 도우미 · 구독 필터 · 기본 브로커 주소", () => {
   assert.deepEqual(subscriptionTopics(" ", "site-a"), ["rfid/site-a/reader/+/state", "rfid/site-a/reader/+/event", "rfid/site-a/host/+/status"]);
   assert.equal(defaultBrokerUrl("192.168.0.41"), "ws://192.168.0.41:9001");
   assert.equal(defaultBrokerUrl(""), "ws://localhost:9001");
+});
+
+test("시계 편차: 살아서 온 하트비트로 재고, retained · 유언은 전 값을 유지하며, 리더의 경과 시간을 보정한다", () => {
+  const hbTime = "2026-09-14T15:32:33.931+09:00";
+  const hbMs = Date.parse(hbTime);
+  const heartbeat = (host, time = hbTime) => JSON.stringify({ type: "status", online: true, host, time, version: "0.4.1", readerCount: 1, onlineReaders: 1, presentReaders: 1, appearToday: 0, removeToday: 0 });
+
+  // 구독 직후 되돌아온 retained 하트비트 — 시각이 묵었으니 편차로 치지 않는다.
+  let m = applyMessage(EMPTY_LIVE, "rfid/s/host/PC-1/status", heartbeat("PC-1"), hbMs + 3_600_000, null, { retained: true });
+  assert.equal(m.hosts["s/PC-1"].skewMs, null, "retained 는 못 잰 상태");
+  assert.equal(clockWarning(m.hosts["s/PC-1"].skewMs), "", "못 잰 동안은 경고 없음");
+
+  // 살아서 온 하트비트: PC 시계가 화면보다 3분 앞섬.
+  m = applyMessage(m, "rfid/s/host/PC-1/status", heartbeat("PC-1"), hbMs - 180_000);
+  assert.equal(m.hosts["s/PC-1"].skewMs, 180_000);
+  assert.equal(clockWarning(m.hosts["s/PC-1"].skewMs), "시계 +3분");
+
+  // 유언(online:false, 시각 없음)과 retained 는 전에 잰 값을 그대로 둔다.
+  m = applyMessage(m, "rfid/s/host/PC-1/status", STATUS_OFF, hbMs);
+  assert.equal(m.hosts["s/PC-1"].skewMs, 180_000, "유언은 편차를 지우지 않음");
+  m = applyMessage(m, "rfid/s/host/PC-1/status", heartbeat("PC-1"), hbMs + 999_999, null, { retained: true });
+  assert.equal(m.hosts["s/PC-1"].skewMs, 180_000, "retained 는 편차를 덮지 않음");
+
+  // 편차 안(1초 지연)이면 경고 없음. 늦은 시계는 음수.
+  m = applyMessage(m, "rfid/s/host/PC-2/status", heartbeat("PC-2"), hbMs + 1_000);
+  assert.equal(m.hosts["s/PC-2"].skewMs, -1_000);
+  assert.equal(clockWarning(-1_000), "");
+  assert.equal(clockWarning(-CLOCK_SKEW_WARN_MS), "", "문턱과 같으면 경고 없음");
+  assert.equal(clockWarning(-45_000), "시계 -45초");
+  assert.equal(clockWarning(3_900_000), "시계 +1시간 5분");
+  assert.equal(formatSkew(178_000), "3분", "분부터는 반올림 — 2분 58초 앞선 시계를 2분이라 하지 않는다");
+  assert.equal(formatSkew(7_200_000), "2시간");
+  assert.equal(formatSkew(2 * 86_400_000), "2일");
+  assert.equal(formatSkew(-500), "1초", "부호는 보지 않고 반올림");
+
+  // 리더 ↔ 감시 PC 는 사업장 + host 이름으로 잇는다. 편차 0 인 PC 의 리더는 빠진다.
+  const stateOf = (host, serial) => JSON.stringify({ type: "state", host, reader: serial, serial, present: true, online: true, uid: "E0040150ABCDEF01", state: "PRESENT", time: hbTime });
+  m = applyMessage(m, "rfid/s/reader/R-1/state", stateOf("PC-1", "R-1"), hbMs - 180_000);
+  m = applyMessage(m, "rfid/s/reader/R-2/state", stateOf("PC-2", "R-2"), hbMs);
+  m = applyMessage(m, "rfid/s/reader/R-3/state", stateOf("PC-9", "R-3"), hbMs);
+  m = applyMessage(m, "rfid/x/reader/R-4/state", stateOf("PC-1", "R-4"), hbMs);
+  const skews = readerSkews(m.readers, m.hosts);
+  assert.deepEqual(skews, { "s/R-1": 180_000, "s/R-2": -1_000 }, "PC-9 는 하트비트가 없고, 사업장 x 의 PC-1 은 다른 PC");
+
+  // 경과 시간 보정: PC-1 시계가 3분 앞서므로 보정 없이는 0 에 묶이고, 보정하면 화면 시계 기준으로 흐른다.
+  const now = hbMs - 180_000 + 45_000;
+  const r1 = m.readers["s/R-1"];
+  assert.equal(elapsedMs(r1.at, r1.receivedAt, now), 0, "보정 없이는 미래 시각이라 0");
+  assert.equal(elapsedMs(r1.at, r1.receivedAt, now, skews["s/R-1"]), 45_000);
+  assert.equal(readerPaint(r1, undefined, undefined, now, skews["s/R-1"]).sub, "00:45");
+  assert.equal(readerPaint(r1, undefined, undefined, now).sub, "00:00");
+  assert.equal(formatAgo(hbTime, now, 180_000), "45초 전");
+  assert.equal(formatAgo(hbTime, now), "0초 전");
+
+  // 편차를 못 잰(null) 감시 PC 목록은 아무 것도 잇지 않는다.
+  assert.deepEqual(readerSkews(m.readers, {}), {});
 });

@@ -593,4 +593,12 @@ UI 동작은 브라우저에서 아래 순서로 직접 확인합니다.
    * **결과**: `YYYY-MM-DD.dev.jsonl`(개발 서버) · `YYYY-MM-DD.main.jsonl`(상시 서비스) 가 있고 한 줄이 이벤트 하나(JSON)입니다. 두 파일에 같은 이벤트가 있어도 2번 창에는 한 번만 보입니다.
 6. 상시 서비스를 `scripts\service.cmd stop` 으로 멈춥니다.
    * **결과**: `logs\live-logger.log` 에 `끝냅니다 — stop.flag` 가 5초 안에 찍히고 `.serve\live-logger.pid` 가 사라집니다. `service.cmd start` 로 다시 켜면 `기록기 시작` 이 찍힙니다.
+7. 시계가 3분 앞선 감시 PC 를 흉내 냅니다 — 지금보다 3분 뒤 시각을 `time` 에 넣은 하트비트를 retained 없이 발행합니다(PowerShell).
+   ```powershell
+   $t = (Get-Date).AddMinutes(3).ToString("yyyy-MM-ddTHH:mm:ss.fffzzz")
+   $json = '{"v":1,"type":"status","online":true,"host":"PC-SKEW","time":"' + $t + '","version":"0.4.1","readerCount":1,"onlineReaders":1,"presentReaders":1,"appearToday":0,"removeToday":0}'
+   & "C:\Program Files\mosquitto\mosquitto_pub.exe" -h localhost -t rfid/default/host/PC-SKEW/status -m $json.Replace('"','\"')
+   ```
+   (`Replace` 는 PowerShell 5.1 이 네이티브 exe 에 인자를 넘길 때 큰따옴표를 벗겨 버리기 때문 — 안 하면 JSON 이 깨져 현황판이 조용히 버립니다.)
+   * **결과**: 오른쪽 `감시 PC` 목록의 `PC-SKEW` 이름 옆에 주황 배지 `시계 +3분` 이 붙고, 패널 위에 `시계 어긋난 감시 PC 1 · PC-SKEW 시계 +3분` 띠가 뜹니다. 같은 하트비트를 `-r` 을 붙여(retained) 발행한 뒤 화면을 새로 고치면 배지가 없습니다(묵은 메시지는 편차로 치지 않음). `host` 가 `PC-SKEW` 인 리더 상태를 [20] 3번처럼 `time` 을 3분 뒤로 해서 발행하면 칸의 경과 시간이 `00:00` 에 묶이지 않고 바로 흐릅니다. 마지막에 `-r -n` 으로 빈 retained 를 내어 `PC-SKEW` 를 지웁니다.
 </details>

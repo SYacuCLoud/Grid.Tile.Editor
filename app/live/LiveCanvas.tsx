@@ -18,6 +18,8 @@ interface LiveCanvasProps {
   labels?: Record<string, string>;
   /** 리더 id → 잔상 글자(마지막에 있던 태그). 유지 시간 안의 것만 들어 있다. */
   ghosts?: Record<string, string>;
+  /** 리더 id → 그 감시 PC 의 시계 편차(ms). 경과 시간을 이만큼 보정한다. */
+  skews?: Record<string, number>;
   /** 칸을 눌렀을 때. 도면 좌표(가로 · 세로 0부터). */
   onCellClick?: (point: Point) => void;
 }
@@ -31,7 +33,7 @@ interface LiveCanvasProps {
  * 다시 그려야 한다.
  */
 export function LiveCanvas(props: LiveCanvasProps) {
-  const { doc, visible, placed, flashes, now, labels, ghosts, onCellClick } = props;
+  const { doc, visible, placed, flashes, now, labels, ghosts, skews, onCellClick } = props;
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const baseRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
@@ -79,8 +81,8 @@ export function LiveCanvas(props: LiveCanvasProps) {
     if (!ctx) return;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, canvasW, canvasH);
-    drawOverlay(ctx, cell, placed, flashes, now, labels, ghosts);
-  }, [canvasH, canvasW, cell, flashes, ghosts, labels, now, placed, ratio]);
+    drawOverlay(ctx, cell, placed, flashes, now, labels, ghosts, skews);
+  }, [canvasH, canvasW, cell, flashes, ghosts, labels, now, placed, ratio, skews]);
 
   return (
     <div ref={wrapRef} className="relative h-full w-full">
@@ -122,9 +124,10 @@ export function drawOverlay(
   now: number,
   labels?: Record<string, string>,
   ghosts?: Record<string, string>,
+  skews?: Record<string, number>,
 ) {
   for (const { reader, cells } of placed) {
-    const paint = readerPaint(reader, labels?.[reader.id], ghosts?.[reader.id], now);
+    const paint = readerPaint(reader, labels?.[reader.id], ghosts?.[reader.id], now, skews?.[reader.id] ?? 0);
     let minX = Number.POSITIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;

@@ -89,7 +89,16 @@ export interface HostStatus {
   appearToday: number;
   removeToday: number;
   receivedAt: number;
+  /**
+   * 감시 PC 시계 − 이 화면 시계(ms). 양수면 PC 시계가 앞선다.
+   * 살아서 온(retained 아닌) 하트비트의 `time` 과 받은 순간을 비교해 잰다. 아직 못 잰 동안은 null.
+   * 여러 PC 의 이벤트 시각을 한 화면에 섞으므로 편차가 크면 경고를 붙이고, 칸의 경과 시간은 이만큼 보정한다.
+   */
+  skewMs: number | null;
 }
+
+/** 이 편차(ms)를 넘으면 감시 PC 타일에 `시계 +n분` 경고를 붙인다. 하트비트 전달 지연은 1초 안이라 넉넉하다. */
+export const CLOCK_SKEW_WARN_MS = 30_000;
 
 export type LiveEventKind = "APPEAR" | "REMOVE";
 
@@ -168,7 +177,12 @@ export function readerId(site: string, key: string): string {
  * retained 토픽에 빈 페이로드가 오면 "지웠다" 는 뜻이라 그 항목을 뺀다.
  * 해석할 수 없는 페이로드는 조용히 무시한다 — 현황판이 한 메시지 때문에 죽으면 안 된다.
  */
-export function applyMessage(model: LiveModel, topic: string, payload: string, now: number, book?: FormatBook | null): LiveModel {
+export interface ApplyOptions {
+  /** 브로커가 구독 직후 되돌려 준 retained 메시지인가. 시계 편차는 이런 묵은 메시지로 재지 않는다. */
+  retained?: boolean;
+}
+
+export function applyMessage(model: LiveModel, topic: string, payload: string, now: number, book?: FormatBook | null, opts?: ApplyOptions): LiveModel {
   const parsed = parseTopic(topic);
   if (!parsed) return model;
   const received = model.received + 1;
@@ -189,12 +203,17 @@ export function applyMessage(model: LiveModel, topic: string, payload: string, n
     const json = parseJson(payload);
     if (!json) return { ...model, received, samples };
     const g = (field: StatusField) => getPath(json, fmt.status[field]);
+    const online = readBool(g("online"), rules);
+    const time = readTime(g("time"), rules) || null;
+    // 시계 편차: 살아서 온 online 하트비트만 근거로 삼는다. retained(묵은 값) · 유언(시각 없음)은 전에 잰 값을 유지.
+    const timeMs = time ? Date.parse(time) : Number.NaN;
+    const skewMs = !opts?.retained && online && Number.isFinite(timeMs) ? timeMs - now : (model.hosts[id]?.skewMs ?? null);
     const status: HostStatus = {
       id,
       site: parsed.site,
       host: readString(g("host")) || parsed.host,
-      online: readBool(g("online"), rules),
-      time: readTime(g("time"), rules) || null,
+      online,
+      time,
       version: readString(g("version")),
       readerCount: readInt(g("readerCount")),
       onlineReaders: readInt(g("onlineReaders")),
@@ -202,6 +221,7 @@ export function applyMessage(model: LiveModel, topic: string, payload: string, n
       appearToday: readInt(g("appearToday")),
       removeToday: readInt(g("removeToday")),
       receivedAt: now,
+      skewMs,
     };
     return { ...model, hosts: { ...model.hosts, [id]: status }, received, samples };
   }
@@ -443,17 +463,17 @@ export interface ReaderPaint {
  * `ghostLabel` 은 비어 있는 칸에 남길 잔상 글자. 부르는 쪽이 `ghostVisible` 로 걸러 넘긴다.
  * `now` 를 주면 제목 아래에 지난 시간(초 단위로 흐름)을 붙인다 — 태그가 있으면 인식된 뒤, 잔상이면 들어낸 뒤.
  */
-export function readerPaint(reader: ReaderState, label?: string, ghostLabel?: string, now?: number): ReaderPaint {
+export function readerPaint(reader: ReaderState, label?: string, ghostLabel?: string, now?: number, skewMs = 0): ReaderPaint {
   if (!reader.online) {
     return { fill: LIVE_COLORS.offline, fillAlpha: 0.35, stroke: LIVE_COLORS.offline, strokeWidth: 1.5, dashed: true, text: "", ghost: false, sub: "" };
   }
   if (reader.present) {
-    const sub = now === undefined ? "" : formatElapsed(elapsedMs(reader.at, reader.receivedAt, now));
+    const sub = now === undefined ? "" : formatElapsed(elapsedMs(reader.at, reader.receivedAt, now, skewMs));
     return { fill: LIVE_COLORS.present, fillAlpha: 0.45, stroke: LIVE_COLORS.present, strokeWidth: 2, dashed: false, text: label || shortUid(reader.uid), ghost: false, sub };
   }
   if (ghostLabel) {
     // 잔상 칸은 옅은 회색으로 살짝 채워 "비었지만 방금 무엇이 있었다" 가 한눈에 갈리게 한다.
-    const sub = now === undefined ? "" : formatElapsed(elapsedMs(reader.lastAt, reader.lastSeenAt, now));
+    const sub = now === undefined ? "" : formatElapsed(elapsedMs(reader.lastAt, reader.lastSeenAt, now, skewMs));
     return { fill: LIVE_COLORS.ghostFill, fillAlpha: 0.35, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: ghostLabel, ghost: true, sub };
   }
   return { fill: null, fillAlpha: 0, stroke: LIVE_COLORS.empty, strokeWidth: 1.5, dashed: false, text: "", ghost: false, sub: "" };
@@ -461,12 +481,51 @@ export function readerPaint(reader: ReaderState, label?: string, ghostLabel?: st
 
 /**
  * 어떤 시각부터 지금까지(ms). 발행 쪽 시각(ISO)을 먼저 쓰고, 못 읽으면 브라우저가 받은 시각으로.
- * 감시 PC 시계가 앞서 있어 음수가 나오면 0.
+ * `skewMs`(감시 PC 시계 − 화면 시계)를 주면 발행 쪽 시각을 화면 시계로 옮겨 센다.
+ * 그래도 감시 PC 시계가 앞서 있어 음수가 나오면 0.
  */
-export function elapsedMs(iso: string, fallbackMs: number, now: number): number {
+export function elapsedMs(iso: string, fallbackMs: number, now: number, skewMs = 0): number {
   const t = iso ? Date.parse(iso) : Number.NaN;
-  const base = Number.isFinite(t) ? t : fallbackMs;
+  const base = Number.isFinite(t) ? t - skewMs : fallbackMs;
   return Math.max(0, now - base);
+}
+
+/**
+ * 리더 id → 그 리더를 맡은 감시 PC 의 시계 편차(ms). 편차를 잰(0 이 아닌) PC 의 리더만 들어 있다.
+ * 리더 상태의 `host` 와 하트비트의 `host` 가 같은 사업장에서 같은 이름일 때 잇는다.
+ */
+export function readerSkews(readers: Record<string, ReaderState>, hosts: Record<string, HostStatus>): Record<string, number> {
+  const byHost = new Map<string, number>();
+  for (const h of Object.values(hosts)) {
+    if (h.skewMs !== null && h.host) byHost.set(`${h.site}/${h.host}`, h.skewMs);
+  }
+  const out: Record<string, number> = {};
+  if (byHost.size === 0) return out;
+  for (const r of Object.values(readers)) {
+    const skew = r.host ? byHost.get(`${r.site}/${r.host}`) : undefined;
+    if (skew !== undefined && skew !== 0) out[r.id] = skew;
+  }
+  return out;
+}
+
+/**
+ * 감시 PC 타일에 붙일 시계 경고. 편차가 `warnMs` 안이거나 아직 못 잰 상태면 빈 문자열.
+ * `시계 +3분`(PC 가 앞섬) · `시계 -45초`(PC 가 늦음).
+ */
+export function clockWarning(skewMs: number | null, warnMs = CLOCK_SKEW_WARN_MS): string {
+  if (skewMs === null || Math.abs(skewMs) <= warnMs) return "";
+  return `시계 ${skewMs > 0 ? "+" : "-"}${formatSkew(skewMs)}`;
+}
+
+/** 편차 크기를 짧게. `45초` · `3분` · `1시간 5분` · `2일`. 부호는 보지 않고, 분부터는 가까운 쪽으로 반올림한다(2분 58초 → `3분`). */
+export function formatSkew(ms: number): string {
+  const sec = Math.round(Math.abs(ms) / 1000);
+  if (sec < 60) return `${sec}초`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}분`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return min % 60 === 0 ? `${hour}시간` : `${hour}시간 ${min % 60}분`;
+  return `${Math.floor(hour / 24)}일`;
 }
 
 /** 칸에 적을 경과 시간. `00:45` · `03:12` · 한 시간을 넘으면 `1:05:03`. 초 단위로 흐른다. */
@@ -575,12 +634,12 @@ export function shortUid(uid: string): string {
   return clean.slice(-6);
 }
 
-/** 사람이 읽는 "n초 전". */
-export function formatAgo(iso: string | null, now: number): string {
+/** 사람이 읽는 "n초 전". `skewMs`(발행 쪽 시계 − 화면 시계)를 주면 그만큼 보정한다. */
+export function formatAgo(iso: string | null, now: number, skewMs = 0): string {
   if (!iso) return "-";
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return "-";
-  const sec = Math.max(0, Math.round((now - t) / 1000));
+  const sec = Math.max(0, Math.round((now - (t - skewMs)) / 1000));
   if (sec < 60) return `${sec}초 전`;
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min}분 전`;
