@@ -5,6 +5,7 @@
  */
 
 import type { LoggedEvent } from "../../server/eventLog";
+import { newestFirst } from "./eventOrder";
 import { type LookupSnapshot, resolveTag } from "./lookup";
 
 export interface HistoryRow {
@@ -57,7 +58,7 @@ export function bulkRows(events: LoggedEvent[], keys?: Set<string>): HistoryRow[
   const groups = [...byReader.entries()].sort((a, b) => (a[1][0]?.reader ?? a[0]).localeCompare(b[1][0]?.reader ?? b[0], "ko"));
   const out: HistoryRow[] = [];
   for (const [, list] of groups) {
-    list.sort((a, b) => b.receivedAt - a.receivedAt || b.time.localeCompare(a.time));
+    list.sort(newestFirst);
     out.push(...pairEvents(list));
   }
   return out;

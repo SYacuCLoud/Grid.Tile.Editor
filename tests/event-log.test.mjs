@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { newestFirst } from "../app/live/eventOrder.ts";
 import { bulkRows, csvCell, historyCsv, historyFileName, pairEvents } from "../app/live/historyCsv.ts";
 import { DEFAULT_HISTORY_RANGE, HISTORY_RANGES, historyRange, rangeQuery, startOfDay } from "../app/live/historyRange.ts";
 import { createEventLog, dayOf, lastRemovals } from "../server/eventLog.ts";
@@ -409,6 +410,57 @@ test("이력 짝짓기: 최신순 이벤트를 등장 → 제거 한 줄로, 짝
   // UID 가 다르면 짝이 아니다.
   const mismatch = pairEvents([ev({ kind: "REMOVE", time: "t2", receivedAt: 2, uid: "X" }), a1]);
   assert.equal(mismatch.length, 2);
+});
+
+test("정렬: 같은 밀리초의 제거(옛 태그) · 등장(새 태그)은 등장이 앞 — 태그 교체 짝짓기가 어긋나지 않는다", () => {
+  // 2026-09-18 06:38 실제 기록: 태그가 바뀌는 순간 REMOVE 와 APPEAR 가 같은 time · receivedAt 으로 찍힌다.
+  const T = Date.parse("2026-09-18T06:38:30.999+09:00");
+  const aX = ev({ time: "2026-09-18T06:38:30.999+09:00", receivedAt: T, uid: "X" });
+  const rX = ev({ kind: "REMOVE", time: "2026-09-18T06:38:32.449+09:00", receivedAt: T + 1450, uid: "X", dwellMs: 1449 });
+  const aY = ev({ time: "2026-09-18T06:38:32.449+09:00", receivedAt: T + 1450, uid: "Y" });
+  const rY = ev({ kind: "REMOVE", time: "2026-09-18T06:38:34.344+09:00", receivedAt: T + 3345, uid: "Y", dwellMs: 1895 });
+  // 파일 순서(오래된 것부터)로 넣어도, 뒤섞어 넣어도 같은 결과.
+  for (const input of [[aX, rX, aY, rY], [rX, aY, aX, rY], [rY, rX, aY, aX]]) {
+    const sorted = [...input].sort(newestFirst);
+    assert.deepEqual(sorted.map((e) => `${e.kind}:${e.uid}`), ["REMOVE:Y", "APPEAR:Y", "REMOVE:X", "APPEAR:X"]);
+    const rows = pairEvents(sorted);
+    assert.deepEqual(rows.map((r) => [r.appear?.uid ?? null, r.remove?.uid ?? null]), [["Y", "Y"], ["X", "X"]], "두 태그가 각각 등장→제거 한 줄");
+  }
+  // 서버 조회와 일괄 이력도 같은 순서를 쓴다.
+  const { dir, cleanup } = freshDir();
+  try {
+    const log = createEventLog(dir, { instance: "t", now: () => T });
+    for (const e of [aX, rX, aY, rY]) log.append(e);
+    const q = log.query({ fromMs: T - 1000, toMs: T + 10_000 });
+    assert.deepEqual(q.events.map((e) => `${e.kind}:${e.uid}`), ["REMOVE:Y", "APPEAR:Y", "REMOVE:X", "APPEAR:X"]);
+    assert.deepEqual(bulkRows([rX, aY, aX, rY]).map((r) => [r.appear?.uid ?? null, r.remove?.uid ?? null]), [["Y", "Y"], ["X", "X"]]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("기록: 다시 켠 프로세스도 오늘 · 어제 파일의 id 를 기억해 감시 PC 의 큐 재전송을 두 번 적지 않는다", () => {
+  const { dir, cleanup } = freshDir();
+  try {
+    const first = createEventLog(dir, { instance: "t", now: () => T0 });
+    const today = ev();
+    const yesterday = ev({ time: "2026-09-15T09:00:00.000+09:00", receivedAt: T0 - 86_400_000 });
+    const older = ev({ time: "2026-09-10T09:00:00.000+09:00", receivedAt: T0 - 6 * 86_400_000 });
+    assert.equal(first.append(today), true);
+    assert.equal(first.append(yesterday), true);
+    assert.equal(first.append(older), true);
+
+    const restarted = createEventLog(dir, { instance: "t", now: () => T0 });
+    assert.equal(restarted.append(today), false, "오늘 파일에 있는 id");
+    assert.equal(restarted.append(yesterday), false, "어제 파일에 있는 id");
+    assert.equal(restarted.append(older), true, "엿새 전 파일은 미리 읽지 않는다(조회가 id 로 거른다)");
+    assert.equal(restarted.append(ev({ uid: "NEW", time: "2026-09-16T09:00:01.000+09:00", receivedAt: T0 + 1000 })), true);
+
+    const other = createEventLog(dir, { instance: "dev", now: () => T0 });
+    assert.equal(other.append(today), true, "다른 프로세스 표시의 파일은 따로 적는다(조회가 합친다)");
+  } finally {
+    cleanup();
+  }
 });
 
 test("일괄 이력: 여러 리더의 이벤트를 리더별로 짝짓고 리더 이름 순으로, 페이지의 리더만 고를 수 있다", () => {

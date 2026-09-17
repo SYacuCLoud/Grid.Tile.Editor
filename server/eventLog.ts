@@ -15,6 +15,8 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { newestFirst } from "../app/live/eventOrder";
+
 export const EVENTS_DIR = ".live/events";
 export const DEFAULT_RETENTION_DAYS = 30;
 /** 한 번에 돌려주는 최대 건수. 화면은 "더 보기" 로 이전 구간을 이어 받는다. */
@@ -128,19 +130,39 @@ export function createEventLog(dir?: string, options: EventLogOptions = {}): Eve
   const retentionDays = Math.max(1, options.retentionDays ?? DEFAULT_RETENTION_DAYS);
   const now = options.now ?? (() => Date.now());
   let appended = 0;
-  // 최근 id — 같은 프로세스 안에서 QoS 1 재전송을 걸러 파일에 두 번 쓰지 않는다.
+  // 최근 id — QoS 1 재전송 · 감시 PC 의 큐 재전송을 걸러 파일에 두 번 쓰지 않는다.
+  // 켤 때 오늘 · 어제 파일(이 프로세스 표시)의 id 를 미리 채운다: 2026-09-18 기록기를 재시작한 뒤 감시 PC 들이
+  // 옛 이벤트를 한꺼번에 다시 보내 137건이 파일에 두 번 적혔다(조회는 id 로 걸러 화면은 멀쩡했지만 파일이 부푼다).
   const recent = new Set<string>();
   const recentOrder: string[] = [];
+  const RECENT_MAX = 20_000;
 
   function remember(id: string): boolean {
     if (recent.has(id)) return false;
     recent.add(id);
     recentOrder.push(id);
-    if (recentOrder.length > 2000) {
-      const old = recentOrder.splice(0, 1000);
+    if (recentOrder.length > RECENT_MAX) {
+      const old = recentOrder.splice(0, RECENT_MAX / 2);
       for (const x of old) recent.delete(x);
     }
     return true;
+  }
+
+  function seedRecent() {
+    const days = new Set([dayOf(now()), dayOf(now() - 86_400_000)]);
+    for (const f of listFiles()) {
+      if (f.instance !== instance || !days.has(f.day)) continue;
+      let text: string;
+      try {
+        text = readFileSync(f.file, "utf8");
+      } catch {
+        continue;
+      }
+      for (const line of text.split("\n")) {
+        const m = /"id":"([^"]+)"/.exec(line);
+        if (m) remember(m[1]);
+      }
+    }
   }
 
   function listFiles(): { file: string; day: string; instance: string }[] {
@@ -152,6 +174,8 @@ export function createEventLog(dir?: string, options: EventLogOptions = {}): Eve
     }
     return out.sort((a, b) => a.day.localeCompare(b.day));
   }
+
+  seedRecent();
 
   return {
     dir: folder,
@@ -193,7 +217,7 @@ export function createEventLog(dir?: string, options: EventLogOptions = {}): Eve
           events.push(e);
         }
       }
-      events.sort((a, b) => b.receivedAt - a.receivedAt || b.time.localeCompare(a.time));
+      events.sort(newestFirst);
       const truncated = events.length > limit;
       return { events: events.slice(0, limit), fromMs: q.fromMs, toMs: q.toMs, truncated, files: files.length };
     },
