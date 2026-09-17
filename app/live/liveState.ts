@@ -149,7 +149,9 @@ export const MAX_EVENTS = 60;
 export const FLASH_MS = 2500;
 
 export type ParsedTopic =
-  | { kind: "state" | "event"; site: string; key: string }
+  | { kind: "state"; site: string; key: string }
+  /** `replay` 는 감시 PC 가 CSV 에서 다시 낸 이벤트(`…/reader/{key}/replay`). 페이로드는 event 와 같고 기록기만 구독한다. */
+  | { kind: "event"; site: string; key: string; replay?: boolean }
   | { kind: "status"; site: string; host: string };
 
 /**
@@ -162,6 +164,7 @@ export function parseTopic(topic: string): ParsedTopic | null {
   const [, site, group, name, leaf] = parts;
   if (!site || !name) return null;
   if (group === "reader" && (leaf === "state" || leaf === "event")) return { kind: leaf, site, key: name };
+  if (group === "reader" && leaf === "replay") return { kind: "event", site, key: name, replay: true };
   if (group === "host" && leaf === "status") return { kind: "status", site, host: name };
   return null;
 }
@@ -680,11 +683,15 @@ export function formatDwell(ms: number | null): string {
   return `${(ms / 60_000).toFixed(1)}분`;
 }
 
-/** 현황판 구독 필터. 사업장을 안 정하면 `+` 로 모두 받는다. */
+/**
+ * 현황판 구독 필터. 사업장을 안 정하면 `+` 로 모두 받는다.
+ * `…/reader/+/replay`(감시 PC 의 재발행)는 일부러 없다 — 지난 이벤트가 지금 상태를 흔들면 안 되니 기록기만 받는다.
+ * `…/host/+/replay-done` 은 재발행 요청의 답이라 화면이 받되 `parseTopic` 이 모델에 넣지 않는다.
+ */
 export function subscriptionTopics(prefix: string, site: string): string[] {
   const p = prefix.trim() || "rfid";
   const s = site.trim() || "+";
-  return [`${p}/${s}/reader/+/state`, `${p}/${s}/reader/+/event`, `${p}/${s}/host/+/status`];
+  return [`${p}/${s}/reader/+/state`, `${p}/${s}/reader/+/event`, `${p}/${s}/host/+/status`, `${p}/${s}/host/+/replay-done`];
 }
 
 /** 기본 브로커 주소. 도면 서버와 같은 PC 의 WebSocket 리스너(9001). */

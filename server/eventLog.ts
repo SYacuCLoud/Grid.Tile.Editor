@@ -25,8 +25,13 @@ export interface LoggedEvent {
   id: string;
   /** 발행 쪽 시각(ISO). 없으면 빈 글자. */
   time: string;
-  /** 서버가 받은 시각(ms). 파일 날짜와 조회 범위는 이것을 쓴다 — 감시 PC 시계가 어긋나도 파일이 흩어지지 않게. */
+  /**
+   * 기록 자리(ms). 파일 날짜와 조회 범위는 이것을 쓴다. 보통은 서버가 받은 시각 — 감시 PC 시계가 어긋나도 파일이 흩어지지 않게.
+   * 늦게 온 이벤트(브로커 세션 큐 · 감시 PC 의 재발행)만 이벤트 자신의 시각이다 — 그래야 이력이 실제 있었던 시간에 나타난다.
+   */
   receivedAt: number;
+  /** 늦게 온 이벤트가 실제로 서버에 닿은 시각(ms). 제때 온 이벤트에는 없다. */
+  loggedAt?: number;
   site: string;
   key: string;
   kind: "APPEAR" | "REMOVE";

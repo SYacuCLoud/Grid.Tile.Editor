@@ -37,6 +37,8 @@ import { loadFormatBook } from "./formatClient";
 import { FormatSettings } from "./FormatSettings";
 import { HistoryExport } from "./HistoryExport";
 import { ReaderHistory } from "./ReaderHistory";
+import { ReplayRequest } from "./ReplayRequest";
+import { isReplayDoneTopic, parseReplayDone, type ReplayDone } from "./replay";
 import { loadLookupBook, loadLookupConfig, type PublicLookupConfig, refreshLookup } from "./lookupClient";
 import { LookupSettings } from "./LookupSettings";
 import { type FormatBook, formatFor, isDefaultFormat, type MessageFormat } from "./messageFormat";
@@ -182,6 +184,10 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
   const [historyId, setHistoryId] = useState<string | null>(null);
   /** 서버 이벤트 로그에서 받은 잔상 씨앗(리더 id → 마지막 제거). 새로 고쳐도 잔상이 남게 한다. */
   const [ghostSeeds, setGhostSeeds] = useState<Record<string, GhostSeed>>({});
+  /** 재발행 요청의 답(`…/host/{PC}/replay-done`). 최근 것부터, 50개까지. */
+  const [replayDone, setReplayDone] = useState<ReplayDone[]>([]);
+  /** 붙어 있는 MQTT 클라이언트. 재발행 요청을 이 접속으로 낸다. */
+  const mqttRef = useRef<MqttClient | null>(null);
   const revisionRef = useRef(-1);
 
   const brokerUrl = loc.broker ?? (typeof window === "undefined" ? "" : defaultBrokerUrl(window.location.hostname));
@@ -336,6 +342,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
           connectTimeout: 8000,
           keepalive: 30,
         });
+        mqttRef.current = client;
         client.on("connect", () => {
           setConnection("connected");
           setConnectionError(null);
@@ -349,6 +356,12 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
         });
         client.on("message", (topic, payload, packet) => {
           const at = Date.now();
+          // 재발행 요청의 답은 모델이 아니라 요청 폼이 보여 준다.
+          if (isReplayDoneTopic(topic)) {
+            const done = parseReplayDone(topic, payload.toString(), at);
+            if (done) setReplayDone((list) => [done, ...list].slice(0, 50));
+            return;
+          }
           const book = formatsRef.current;
           // 구독 직후 되돌아오는 retained 는 묵은 메시지 — 시계 편차의 근거로 쓰지 않는다.
           const retained = packet.retain === true;
@@ -363,9 +376,18 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
 
     return () => {
       cancelled = true;
+      if (mqttRef.current === client) mqttRef.current = null;
       client?.end(true);
     };
   }, [brokerUrl, loc.prefix, loc.site, reconnectNonce]);
+
+  /** 재발행 요청 등 화면이 브로커로 내는 메시지. 붙어 있지 않으면 false. */
+  const publishMqtt = useCallback((topic: string, payload: string): boolean => {
+    const c = mqttRef.current;
+    if (!c || !c.connected) return false;
+    c.publish(topic, payload, { qos: 1 });
+    return true;
+  }, []);
 
   // ---- 시계 · 잔상 ----
   // 잔상이 살아 있으면 빠르게, 아니면 1초에 한 번 — "n초 전" 과 시계만 움직인다.
@@ -721,6 +743,14 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
                 </li>
               ))}
             </ul>
+            <ReplayRequest
+              prefix={loc.prefix}
+              site={loc.site}
+              hosts={hosts.map((h) => ({ host: h.host, site: h.site, online: h.online }))}
+              connected={connection === "connected"}
+              publish={publishMqtt}
+              done={replayDone}
+            />
           </section>
 
           {match.unplaced.length > 0 ? (

@@ -11,7 +11,7 @@ import test from "node:test";
 import { bulkRows, csvCell, historyCsv, historyFileName, pairEvents } from "../app/live/historyCsv.ts";
 import { DEFAULT_HISTORY_RANGE, HISTORY_RANGES, historyRange, rangeQuery, startOfDay } from "../app/live/historyRange.ts";
 import { createEventLog, dayOf, lastRemovals } from "../server/eventLog.ts";
-import { createEventLogger, readLoggerConfig } from "../server/eventLogger.ts";
+import { connectOptions, createEventLogger, LATE_MS, placementOf, readLoggerConfig } from "../server/eventLogger.ts";
 import { createFormatStore } from "../server/formatStore.ts";
 import { createLiveApi } from "../server/liveApi.ts";
 
@@ -147,9 +147,10 @@ test("기록기: 브로커의 이벤트를 형식 프로필로 읽어 로그에 
     const said = [];
     const handle = createEventLogger({ log, formats, configDir: join(dir, ".live"), connect: fake.connect, now: () => T0, logger: (m) => said.push(m) });
     await new Promise((r) => setTimeout(r, 10));
-    fake.handlers.connect();
-    assert.deepEqual(fake.subscribed, [{ topic: "rfid/+/reader/+/event", options: { qos: 1 } }]);
+    fake.handlers.connect({ sessionPresent: false });
+    assert.deepEqual(fake.subscribed, [{ topic: ["rfid/+/reader/+/event", "rfid/+/reader/+/replay"], options: { qos: 1 } }]);
     assert.equal(handle.status().connected, true);
+    assert.equal(handle.status().sessionPresent, false);
 
     const payload = JSON.stringify({ v: 1, type: "event", time: "2026-09-16T09:00:00.000+09:00", kind: "APPEAR", reader: "05-01", serial: "RR657-005592", uid: "C6117A17530104E0", host: "C1141" });
     fake.handlers.message("rfid/default/reader/RR657-005592/event", Buffer.from(payload));
@@ -168,7 +169,8 @@ test("기록기: 브로커의 이벤트를 형식 프로필로 읽어 로그에 
     // 사업장 프로필이 있으면 그 경로로 읽는다.
     formats.save("gw", { event: { kind: "ev", uid: "tag.epc", reader: "device.label", time: "ts" }, values: { removeValues: ["OUT"] } }, "t");
     fake.handlers.message("plc/gw/reader/GW-1/event", Buffer.from(JSON.stringify({ ev: "OUT", tag: { epc: "E004" }, device: { label: "게이트" }, ts: 1789443090 })));
-    const gw = log.query({ fromMs: T0 - 1000, toMs: T0 + 1000, site: "gw" });
+    // ts 는 이틀 전이라 "늦게 온 것" — 자기 시각 자리에 기록되므로 조회 범위를 그만큼 넓힌다.
+    const gw = log.query({ fromMs: T0 - 3 * 86_400_000, toMs: T0 + 1000, site: "gw" });
     assert.equal(gw.events.length, 1);
     assert.equal(gw.events[0].kind, "REMOVE");
     assert.equal(gw.events[0].reader, "게이트");
@@ -180,12 +182,73 @@ test("기록기: 브로커의 이벤트를 형식 프로필로 읽어 로그에 
   }
 });
 
+test("기록기 세션: main 은 고정 clientId 영속 세션, 그 밖은 임시, logger.json 이 우선한다", () => {
+  const base = { enabled: true, broker: "mqtt://x", prefix: "rfid", site: "+", retentionDays: 30, persistent: null, clientId: null };
+  assert.deepEqual(connectOptions(base, "main"), { clientId: "grid-live-log-main", clean: false, persistent: true });
+  const dev = connectOptions(base, "dev");
+  assert.equal(dev.clean, true);
+  assert.equal(dev.persistent, false);
+  assert.match(dev.clientId, /^grid-live-log-dev-[a-z0-9]+$/);
+  assert.deepEqual(connectOptions({ ...base, persistent: true, clientId: "board-1" }, "dev"), { clientId: "board-1", clean: false, persistent: true });
+  assert.equal(connectOptions({ ...base, persistent: false }, "main").clean, true);
+});
+
+test("기록기: 늦게 온 이벤트(세션 큐 · 재발행)는 자기 시각 자리에 기록하고 실제 받은 시각을 loggedAt 에 남긴다", async () => {
+  const { dir, cleanup } = freshDir();
+  try {
+    writeFileSync(join(dir, "logger.json"), JSON.stringify({ persistent: true }), "utf8");
+    const formats = createFormatStore(dir, { log: () => {} });
+    const log = createEventLog(join(dir, "events"), { instance: "t", now: () => T0 });
+    const fake = fakeMqtt();
+    let seenOptions = null;
+    const handle = createEventLogger({ log, formats, configDir: dir, connect: async (_url, options) => { seenOptions = options; return fake.client; }, now: () => T0, logger: () => {} });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(seenOptions.clientId, "grid-live-log-t");
+    assert.equal(seenOptions.clean, false);
+    fake.handlers.connect({ sessionPresent: true });
+    assert.equal(handle.status().sessionPresent, true);
+
+    // 제때 온 것: 받은 시각 자리. 시계 편차 몇 초는 늦은 것이 아니다.
+    const onTime = new Date(T0 - 3000).toISOString();
+    fake.handlers.message("rfid/default/reader/RR657-005592/event", Buffer.from(JSON.stringify({ v: 1, type: "event", time: onTime, kind: "APPEAR", reader: "05-01", serial: "RR657-005592", uid: "AA", host: "C1141" })));
+    // 15시간 전 이벤트가 이제 내려옴(브로커 큐).
+    const lateTime = new Date(T0 - 15 * 3_600_000).toISOString();
+    fake.handlers.message("rfid/default/reader/RR657-005592/event", Buffer.from(JSON.stringify({ v: 1, type: "event", time: lateTime, kind: "REMOVE", reader: "05-01", serial: "RR657-005592", uid: "BB", dwellMs: 5000, host: "C1141" })));
+    // 감시 PC 의 재발행 토픽도 같은 이벤트로 기록한다.
+    const replayTime = new Date(T0 - 14 * 3_600_000).toISOString();
+    fake.handlers.message("rfid/default/reader/RR657-005592/replay", Buffer.from(JSON.stringify({ v: 1, type: "event", time: replayTime, kind: "APPEAR", reader: "05-01", serial: "RR657-005592", uid: "BB", host: "C1141" })));
+
+    const st = handle.status();
+    assert.equal(st.logged, 3);
+    assert.equal(st.late, 2);
+    const recent = log.query({ fromMs: T0 - 10_000, toMs: T0 });
+    assert.equal(recent.events.length, 1);
+    assert.equal(recent.events[0].uid, "AA");
+    assert.equal(recent.events[0].loggedAt, undefined);
+    const old = log.query({ fromMs: T0 - 16 * 3_600_000, toMs: T0 - 13 * 3_600_000 });
+    assert.equal(old.events.length, 2);
+    assert.equal(old.events[0].uid, "BB");
+    assert.equal(old.events[0].kind, "APPEAR");
+    assert.equal(old.events[1].receivedAt, Date.parse(lateTime));
+    assert.equal(old.events[1].loggedAt, T0);
+    // 파일도 이벤트 자신의 날짜로 갈라진다.
+    assert.ok(existsSync(join(dir, "events", `${dayOf(Date.parse(lateTime))}.t.jsonl`)));
+
+    assert.deepEqual(placementOf("깨진 시각", T0), { receivedAt: T0, late: false });
+    assert.deepEqual(placementOf(new Date(T0 - LATE_MS).toISOString(), T0), { receivedAt: T0, late: false });
+    assert.equal(placementOf(new Date(T0 - LATE_MS - 1).toISOString(), T0).late, true);
+    await handle.stop();
+  } finally {
+    cleanup();
+  }
+});
+
 test("기록기 설정: 파일이 없으면 같은 PC 브로커, 있으면 그 값, enabled:false 면 구독하지 않는다", async () => {
   const { dir, cleanup } = freshDir();
   try {
-    assert.deepEqual(readLoggerConfig(dir), { enabled: true, broker: "mqtt://127.0.0.1:1883", prefix: "rfid", site: "+", retentionDays: 30 });
-    writeFileSync(join(dir, "logger.json"), JSON.stringify({ broker: "mqtt://10.0.0.9:1883", prefix: "plc", retentionDays: 7 }), "utf8");
-    assert.deepEqual(readLoggerConfig(dir), { enabled: true, broker: "mqtt://10.0.0.9:1883", prefix: "plc", site: "+", retentionDays: 7 });
+    assert.deepEqual(readLoggerConfig(dir), { enabled: true, broker: "mqtt://127.0.0.1:1883", prefix: "rfid", site: "+", retentionDays: 30, persistent: null, clientId: null });
+    writeFileSync(join(dir, "logger.json"), JSON.stringify({ broker: "mqtt://10.0.0.9:1883", prefix: "plc", retentionDays: 7, persistent: false, clientId: " board-1 " }), "utf8");
+    assert.deepEqual(readLoggerConfig(dir), { enabled: true, broker: "mqtt://10.0.0.9:1883", prefix: "plc", site: "+", retentionDays: 7, persistent: false, clientId: "board-1" });
 
     writeFileSync(join(dir, "logger.json"), JSON.stringify({ enabled: false }), "utf8");
     const formats = createFormatStore(dir, { log: () => {} });
@@ -229,7 +292,8 @@ async function call(api, method, url) {
 test("API: /api/live/events 는 리더별 최신 이벤트를 시간 범위로, status 는 로그 · 기록기 상태를 준다", async () => {
   const { dir, cleanup } = freshDir();
   try {
-    const { middleware, store } = createLiveApi(dir, { log: () => {}, logger: false, eventLog: { instance: "t", now: () => T0 } });
+    // 라우트의 시계도 고정한다 — `before` 없는 요청(잔상 씨앗)이 실제 날짜에 따라 달라지면 안 된다.
+    const { middleware, store } = createLiveApi(dir, { log: () => {}, logger: false, eventLog: { instance: "t", now: () => T0 }, clock: () => T0 + 30_000 });
     store.events.append(ev());
     store.events.append(ev({ kind: "REMOVE", time: "2026-09-16T09:00:07.000+09:00", receivedAt: T0 + 7000, dwellMs: 7000 }));
     store.events.append(ev({ time: "2026-09-14T09:00:00.000+09:00", receivedAt: T0 - 2 * 86_400_000 }));

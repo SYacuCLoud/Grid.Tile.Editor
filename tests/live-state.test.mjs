@@ -266,8 +266,8 @@ test("글자 도우미 · 구독 필터 · 기본 브로커 주소", () => {
   assert.equal(formatDwell(7069), "7.1초");
   assert.equal(formatDwell(125_000), "2.1분");
   assert.equal(formatDwell(null), "");
-  assert.deepEqual(subscriptionTopics("rfid", ""), ["rfid/+/reader/+/state", "rfid/+/reader/+/event", "rfid/+/host/+/status"]);
-  assert.deepEqual(subscriptionTopics(" ", "site-a"), ["rfid/site-a/reader/+/state", "rfid/site-a/reader/+/event", "rfid/site-a/host/+/status"]);
+  assert.deepEqual(subscriptionTopics("rfid", ""), ["rfid/+/reader/+/state", "rfid/+/reader/+/event", "rfid/+/host/+/status", "rfid/+/host/+/replay-done"]);
+  assert.deepEqual(subscriptionTopics(" ", "site-a"), ["rfid/site-a/reader/+/state", "rfid/site-a/reader/+/event", "rfid/site-a/host/+/status", "rfid/site-a/host/+/replay-done"]);
   assert.equal(defaultBrokerUrl("192.168.0.41"), "ws://192.168.0.41:9001");
   assert.equal(defaultBrokerUrl(""), "ws://localhost:9001");
 });

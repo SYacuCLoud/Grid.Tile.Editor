@@ -603,4 +603,8 @@ UI 동작은 브라우저에서 아래 순서로 직접 확인합니다.
    ```
    (`Replace` 는 PowerShell 5.1 이 네이티브 exe 에 인자를 넘길 때 큰따옴표를 벗겨 버리기 때문 — 안 하면 JSON 이 깨져 현황판이 조용히 버립니다.)
    * **결과**: 오른쪽 `감시 PC` 목록의 `PC-SKEW` 이름 옆에 주황 배지 `시계 +3분` 이 붙고, 패널 위에 `시계 어긋난 감시 PC 1 · PC-SKEW 시계 +3분` 띠가 뜹니다. 같은 하트비트를 `-r` 을 붙여(retained) 발행한 뒤 화면을 새로 고치면 배지가 없습니다(묵은 메시지는 편차로 치지 않음). `host` 가 `PC-SKEW` 인 리더 상태를 [20] 3번처럼 `time` 을 3분 뒤로 해서 발행하면 칸의 경과 시간이 `00:00` 에 묶이지 않고 바로 흐릅니다. 마지막에 `-r -n` 으로 빈 retained 를 내어 `PC-SKEW` 를 지웁니다.
+8. 기록기 영속 세션 — 기록기가 죽어 있던 동안의 이벤트를 브로커가 쌓아 두는지 봅니다. `scripts\service.cmd stop` 으로 상시 서비스를 멈춘 뒤(기록기도 함께 끝남) [20] 3번처럼 이벤트를 하나 발행하고, `service.cmd start` 로 다시 켭니다.
+   * **결과**: `logs\live-logger.log` 에 `grid-live-log-main · 세션 이어받음 — 쌓인 이벤트를 받는다` 가 찍히고, 멈춘 동안 낸 이벤트가 `YYYY-MM-DD.main.jsonl` 에 들어옵니다. 이벤트 `time` 이 받은 시각보다 60초 넘게 앞서면 그 시각의 날짜 파일에 `loggedAt` 이 붙어 기록되고, `/api/live/events/status` 의 `logger.late` 가 1 늘어납니다. (개발 서버 3200 은 임시 세션이 기본이라 이 시험은 3100 에서 합니다.)
+9. 빠진 이력 요청 — 오른쪽 `감시 PC` 목록 아래 `▸ 빠진 이력 요청` 을 펼쳐 시작 · 끝 시각과 대상 PC 를 고르고 `요청` 을 누릅니다. 감시 PC 가 없으면 mosquitto_sub 로 `rfid/default/replay` 를 구독해 요청이 오는지만 봅니다.
+   * **결과**: 요청 JSON `{"v":1,"type":"replay","from":…,"to":…,"requestId":…}` 이 `rfid/{site}/replay`(PC 를 고르면 `rfid/{site}/host/{PC}/replay`)로 나가고, RfidReaderMonitor 0.5.0 이상 PC 가 `…/host/{PC}/replay-done` 으로 답하면 폼 아래에 `C1101 412건` 처럼 쌓입니다. 재발행된 이벤트는 `…/reader/{key}/replay` 로 오므로 도면의 칸 색은 바뀌지 않고, 이력 창을 다시 열면 그 구간이 채워져 있습니다. 브로커에 붙기 전에는 `요청` 단추가 잠깁니다.
 </details>

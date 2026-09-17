@@ -20,6 +20,8 @@ export interface LiveApiOptions extends FormatStoreOptions {
   /** 브로커 기록기를 켤지. 시험에서는 false 또는 가짜 connect. */
   logger?: boolean;
   connect?: MqttConnect;
+  /** 라우트의 시계(ms). 시험이 고정한다. (`now` 는 FormatStoreOptions 가 Date 로 쓴다.) */
+  clock?: () => number;
 }
 
 /** 형식 저장소 · 이벤트 로그 · 기록기를 한 벌로. App Router 라우트도 이것을 쓴다. */
@@ -78,7 +80,7 @@ export function createLiveApi(dir?: string, options?: LiveApiOptions): { middlew
       return;
     }
     try {
-      const { status, body } = await routeLive(store, { method: req.method ?? "GET", segments, query: url.searchParams, body: () => readBody(req) });
+      const { status, body } = await routeLive(store, { method: req.method ?? "GET", segments, query: url.searchParams, body: () => readBody(req) }, options?.clock);
       sendJson(res, status, body);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
