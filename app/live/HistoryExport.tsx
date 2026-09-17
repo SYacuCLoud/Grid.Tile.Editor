@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { loadReaderEvents } from "./eventsClient";
 import { bulkRows, downloadText, historyCsv, historyFileName } from "./historyCsv";
+import { DEFAULT_HISTORY_RANGE, HISTORY_RANGES, type HistoryRangeId, rangeQuery } from "./historyRange";
 import type { LookupSnapshot } from "./lookup";
 
 /**
  * 여러 리더의 식별 이력을 한 파일로 내려받는 작은 줄.
- * 범위는 "이 페이지에 놓인 리더" 또는 "사업장 전체", 기간은 24시간 ~ 30일. 서버에서 그 기간의 이벤트를 한 번에 받아
+ * 범위는 "이 페이지에 놓인 리더" 또는 "사업장 전체", 기간은 오늘(0시부터) · 24시간 ~ 30일. 서버에서 그 기간의 이벤트를 한 번에 받아
  * 리더별로 등장 · 제거를 짝지어 CSV 한 장으로 만든다(리더 열이 있으니 엑셀에서 필터로 가른다).
  */
 
@@ -22,17 +23,11 @@ interface Props {
   now: number;
 }
 
-const RANGES: { hours: number; label: string }[] = [
-  { hours: 24, label: "24시간" },
-  { hours: 72, label: "3일" },
-  { hours: 168, label: "7일" },
-  { hours: 720, label: "30일" },
-];
 const LIMIT = 50_000;
 
 export function HistoryExport(props: Props) {
   const { site, placedIds, title, snapshotFor, now } = props;
-  const [hours, setHours] = useState(24);
+  const [range, setRange] = useState<HistoryRangeId>(DEFAULT_HISTORY_RANGE);
   const [scope, setScope] = useState<"page" | "site">("page");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -40,7 +35,7 @@ export function HistoryExport(props: Props) {
   const run = () => {
     setBusy(true);
     setNote(null);
-    loadReaderEvents({ site: site || undefined, hours, limit: LIMIT })
+    loadReaderEvents({ site: site || undefined, ...rangeQuery(range, Date.now()), limit: LIMIT })
       .then((page) => {
         const rows = bulkRows(page.events, scope === "page" ? new Set(placedIds) : undefined);
         if (rows.length === 0) {
@@ -66,9 +61,9 @@ export function HistoryExport(props: Props) {
         <option value="page">이 페이지 리더 {placedIds.length}대</option>
         <option value="site">{site ? `사업장 ${site} 전체` : "모든 사업장"}</option>
       </select>
-      <select className={select} value={hours} onChange={(e) => setHours(Number(e.target.value))} disabled={busy} aria-label="기간">
-        {RANGES.map((r) => (
-          <option key={r.hours} value={r.hours}>
+      <select className={select} value={range} onChange={(e) => setRange(e.target.value as HistoryRangeId)} disabled={busy} aria-label="기간">
+        {HISTORY_RANGES.map((r) => (
+          <option key={r.id} value={r.id}>
             {r.label}
           </option>
         ))}

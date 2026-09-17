@@ -85,6 +85,23 @@ export interface EventLogOptions {
   now?: () => number;
 }
 
+/**
+ * 리더마다 가장 최근 이벤트가 제거(REMOVE)인 것만 — 화면을 새로 켰을 때 잔상을 되살리는 재료다.
+ * `events` 는 조회 결과(최신이 앞). 마지막 이벤트가 등장이면 지금 놓여 있는 것이니 잔상이 아니다.
+ * 결과는 리더 id(`site/key`) 순서 없이 처음 만난 순(= 최근 것부터).
+ */
+export function lastRemovals(events: LoggedEvent[]): LoggedEvent[] {
+  const seen = new Set<string>();
+  const out: LoggedEvent[] = [];
+  for (const e of events) {
+    const id = `${e.site}/${e.key}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (e.kind === "REMOVE" && e.uid) out.push(e);
+  }
+  return out;
+}
+
 /** 서버 로컬 날짜 `YYYY-MM-DD`. 하루 파일의 경계는 서버 시계다. */
 export function dayOf(ms: number): string {
   const d = new Date(ms);

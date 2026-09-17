@@ -32,6 +32,7 @@ import {
   pruneFlashes,
   readerPaint,
   readerSkews,
+  seedGhosts,
   shortUid,
   subscriptionTopics,
 } from "../app/live/liveState.ts";
@@ -269,6 +270,33 @@ test("글자 도우미 · 구독 필터 · 기본 브로커 주소", () => {
   assert.deepEqual(subscriptionTopics(" ", "site-a"), ["rfid/site-a/reader/+/state", "rfid/site-a/reader/+/event", "rfid/site-a/host/+/status"]);
   assert.equal(defaultBrokerUrl("192.168.0.41"), "ws://192.168.0.41:9001");
   assert.equal(defaultBrokerUrl(""), "ws://localhost:9001");
+});
+
+test("잔상 되살리기: 서버 로그의 마지막 제거를 비어 있고 잔상 없는 리더에만 채운다", () => {
+  const t0 = 1_000_000;
+  const empty = (key) => JSON.stringify({ type: "state", host: "PC-1", reader: key, serial: key, present: false, online: true, uid: "", state: "EMPTY", time: "2026-09-14T15:32:40.000+09:00" });
+  let m = applyMessage(EMPTY_LIVE, "rfid/s/reader/A/state", empty("A"), t0);
+  m = applyMessage(m, "rfid/s/reader/B/state", empty("B"), t0);
+  m = applyMessage(m, "rfid/s/reader/C/state", STATE_PRESENT.replace("RR657-005592", "C"), t0);
+  // B 는 이 화면이 직접 본 잔상이 있다.
+  m = { ...m, readers: { ...m.readers, "s/B": { ...m.readers["s/B"], lastUid: "SEEN", lastAt: "2026-09-14T15:40:00.000+09:00", lastSeenAt: t0 } } };
+
+  const seeds = {
+    "s/A": { uid: "FROMLOG", at: "2026-09-14T15:30:00.000+09:00", seenAt: t0 - 5000 },
+    "s/B": { uid: "OLDER", at: "2026-09-14T15:20:00.000+09:00", seenAt: t0 - 9000 },
+    "s/C": { uid: "X", at: "2026-09-14T15:00:00.000+09:00", seenAt: t0 - 9000 },
+    "s/Z": { uid: "NOREADER", at: "", seenAt: 0 },
+  };
+  const out = seedGhosts(m.readers, seeds);
+  assert.equal(out["s/A"].lastUid, "FROMLOG", "빈 리더는 로그로 채움");
+  assert.equal(out["s/A"].lastSeenAt, t0 - 5000, "만료 기준은 서버가 받은 시각");
+  assert.equal(out["s/B"].lastUid, "SEEN", "직접 본 잔상이 우선");
+  assert.equal(out["s/C"].lastUid, "", "태그가 놓인 리더는 그대로");
+  assert.equal("s/Z" in out, false, "모르는 리더는 만들지 않음");
+  assert.equal(ghostVisible(out["s/A"], t0, 60_000), true);
+
+  assert.equal(seedGhosts(m.readers, {}), m.readers, "씨앗이 없으면 같은 객체");
+  assert.equal(seedGhosts(out, seeds), out, "더 채울 것이 없으면 같은 객체");
 });
 
 test("시계 편차: 살아서 온 하트비트로 재고, retained · 유언은 전 값을 유지하며, 리더의 경과 시간을 보정한다", () => {

@@ -9,7 +9,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { bulkRows, csvCell, historyCsv, historyFileName, pairEvents } from "../app/live/historyCsv.ts";
-import { createEventLog, dayOf } from "../server/eventLog.ts";
+import { DEFAULT_HISTORY_RANGE, HISTORY_RANGES, historyRange, rangeQuery, startOfDay } from "../app/live/historyRange.ts";
+import { createEventLog, dayOf, lastRemovals } from "../server/eventLog.ts";
 import { createEventLogger, readLoggerConfig } from "../server/eventLogger.ts";
 import { createFormatStore } from "../server/formatStore.ts";
 import { createLiveApi } from "../server/liveApi.ts";
@@ -245,8 +246,23 @@ test("API: /api/live/events 는 리더별 최신 이벤트를 시간 범위로, 
     const wide = await call(middleware, "GET", `/api/live/events?key=RR657-005592&hours=72&before=${T0 + 10_000}`);
     assert.equal(wide.json.events.length, 3);
 
+    // `since` — 화면의 "오늘": 그 시각부터. hours 가 함께 와도 since 가 이긴다. 최대 폭(31일)은 넘지 못한다.
+    const today = await call(middleware, "GET", `/api/live/events?key=RR657-005592&since=${T0 - 3_600_000}&hours=720&before=${T0 + 10_000}`);
+    assert.equal(today.json.fromMs, T0 - 3_600_000);
+    assert.equal(today.json.events.length, 2, "48시간 전 것은 since 앞");
+    assert.ok(Math.abs(today.json.hours - (3_610_000 / 3_600_000)) < 1e-9, "hours 는 실제 폭");
+    const tooWide = await call(middleware, "GET", `/api/live/events?key=RR657-005592&since=${T0 - 400 * 86_400_000}&before=${T0}`);
+    assert.equal(tooWide.json.fromMs, T0 - 31 * 86_400_000, "31일로 잘림");
+
+    // 잔상 씨앗: 리더마다 마지막 이벤트가 제거인 것. 다른 리더는 등장이 마지막이라 빠진다.
+    store.events.append(ev({ key: "R-2", serial: "R-2", time: "2026-09-16T09:00:20.000+09:00", receivedAt: T0 + 20_000 }));
+    const ghosts = await call(middleware, "GET", "/api/live/events/ghosts?site=default&hours=24");
+    assert.equal(ghosts.statusCode, 200);
+    assert.deepEqual(ghosts.json.ghosts.map((g) => [g.key, g.kind, g.uid]), [["RR657-005592", "REMOVE", "C6117A17530104E0"]]);
+    assert.equal(ghosts.json.truncated, false);
+
     const status = await call(middleware, "GET", "/api/live/events/status");
-    assert.equal(status.json.log.appended, 3);
+    assert.equal(status.json.log.appended, 4, "위에서 넣은 3건 + 잔상 씨앗 시험용 1건");
     assert.equal(status.json.logger, null, "시험에서는 기록기를 끈다");
 
     assert.equal((await call(middleware, "GET", "/api/live/events/nope")).statusCode, 404);
@@ -278,6 +294,37 @@ test("CSV: BOM · 머리글 · 따옴표 처리 · 체류 초 · 태그 이름, 
   assert.equal(csvCell(null), "");
   assert.equal(historyFileName("05-01 / 칼:작업", new Date("2026-09-16T12:00:00")), "식별이력_05-01_칼_작업_2026-09-16.csv");
   assert.equal(historyFileName("   ", new Date("2026-09-16T12:00:00")), "식별이력_reader_2026-09-16.csv");
+});
+
+test("lastRemovals: 리더별 첫(최신) 이벤트만 보고, 그것이 UID 있는 제거일 때만 남긴다", () => {
+  const events = [
+    ev({ key: "A", kind: "REMOVE", time: "2026-09-16T09:00:30.000+09:00", receivedAt: T0 + 30_000, uid: "AAA" }),
+    ev({ key: "B", kind: "APPEAR", time: "2026-09-16T09:00:25.000+09:00", receivedAt: T0 + 25_000, uid: "BBB" }),
+    ev({ key: "B", kind: "REMOVE", time: "2026-09-16T09:00:20.000+09:00", receivedAt: T0 + 20_000, uid: "B0" }),
+    ev({ key: "A", kind: "APPEAR", time: "2026-09-16T09:00:10.000+09:00", receivedAt: T0 + 10_000, uid: "AAA" }),
+    ev({ key: "C", kind: "REMOVE", time: "2026-09-16T09:00:05.000+09:00", receivedAt: T0 + 5_000, uid: "" }),
+  ];
+  assert.deepEqual(lastRemovals(events).map((e) => e.key), ["A"], "B 는 등장이 마지막, C 는 UID 없음");
+  assert.deepEqual(lastRemovals([]), []);
+});
+
+test("기간 선택: 오늘은 이 시간대의 0시부터, 이어 받기는 달력 하루씩, 나머지는 n시간 폭", () => {
+  assert.equal(DEFAULT_HISTORY_RANGE, "today");
+  assert.deepEqual(HISTORY_RANGES.map((r) => r.label), ["오늘", "24시간", "3일", "7일", "30일"]);
+  assert.equal(historyRange("없는 값").id, "today", "모르는 값은 첫 항목");
+
+  const now = new Date(2026, 8, 17, 14, 30, 5).getTime(); // 2026-09-17 14:30:05 (이 환경 시간대)
+  const midnight = new Date(2026, 8, 17).getTime();
+  assert.equal(startOfDay(now), midnight);
+  assert.equal(startOfDay(midnight), midnight, "0시는 그대로");
+
+  assert.deepEqual(rangeQuery("today", now), { since: midnight });
+  // 이어 받기: 오늘 0시 앞은 어제 0시 ~ 오늘 0시.
+  assert.deepEqual(rangeQuery("today", now, midnight), { since: new Date(2026, 8, 16).getTime(), before: midnight });
+  assert.deepEqual(rangeQuery("24h", now), { hours: 24 });
+  assert.deepEqual(rangeQuery("7d", now, midnight), { hours: 168, before: midnight });
+  assert.equal(historyRange("today").step, "하루");
+  assert.equal(historyRange("3d").step, "3일");
 });
 
 // ------------------------------------------------------------ 화면: 등장 · 제거 짝짓기

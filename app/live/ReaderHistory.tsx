@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { formatStamp } from "../editor/server/api";
 import { type EventPage, loadReaderEvents, type LoggedEvent } from "./eventsClient";
 import { downloadText, historyCsv, historyFileName, pairEvents } from "./historyCsv";
+import { DEFAULT_HISTORY_RANGE, HISTORY_RANGES, historyRange, type HistoryRangeId, rangeQuery } from "./historyRange";
 import { formatDwell, LIVE_COLORS, type ReaderState } from "./liveState";
 import { type LookupSnapshot, resolveTag } from "./lookup";
 
@@ -11,7 +12,7 @@ import { type LookupSnapshot, resolveTag } from "./lookup";
  * 리더 하나의 식별 이력.
  *
  * 칸(또는 목록의 리더 줄)을 누르면 열린다. 서버가 브로커를 구독해 쌓아 둔 등장 · 제거 이벤트를 최신부터 보이고,
- * 기간(24시간 · 3일 · 7일 · 30일)을 고르거나 `이전 … 더` 로 과거를 이어 받는다. 기준정보 매핑이 있으면 UID 대신 실물 이름이 붙는다.
+ * 기간(오늘 · 24시간 · 3일 · 7일 · 30일)을 고르거나 `이전 … 더` 로 과거를 이어 받는다. 기준정보 매핑이 있으면 UID 대신 실물 이름이 붙는다.
  * `CSV 내려받기` 는 지금 보이는 목록을 그대로 파일로 준다(엑셀용 UTF-8 BOM).
  * 현황판 자체는 여전히 읽기 전용이다 — 여기서도 아무것도 바꾸지 않는다.
  */
@@ -25,18 +26,12 @@ interface Props {
   onClose: () => void;
 }
 
-const RANGES: { hours: number; label: string }[] = [
-  { hours: 24, label: "24시간" },
-  { hours: 72, label: "3일" },
-  { hours: 168, label: "7일" },
-  { hours: 720, label: "30일" },
-];
 /** 한 구간에 받아 오는 최대 건수. 리더 하나가 30일에 수천 건이면 그때 `더` 로 이어 받는다. */
 const LIMIT = 5000;
 
 export function ReaderHistory(props: Props) {
   const { reader, place, snapshot, now, onClose } = props;
-  const [hours, setHours] = useState(24);
+  const [range, setRange] = useState<HistoryRangeId>(DEFAULT_HISTORY_RANGE);
   const [pages, setPages] = useState<EventPage[]>([]);
   // 처음 열릴 때 곧 읽기 시작하므로 true 로 시작한다. 리더가 바뀌면 부모가 key 로 새로 만든다.
   const [busy, setBusy] = useState(true);
@@ -46,10 +41,10 @@ export function ReaderHistory(props: Props) {
   const oldest = pages.length > 0 ? pages[pages.length - 1].fromMs : now;
 
   /** 처음부터(또는 기간을 바꿔) 다시 읽거나, `before` 를 주면 그 앞 구간을 이어 붙인다. */
-  const load = (range: number, before?: number) => {
+  const load = (id: HistoryRangeId, before?: number) => {
     setBusy(true);
     setError(null);
-    loadReaderEvents({ site: reader.site, key: reader.key, hours: range, before, limit: LIMIT })
+    loadReaderEvents({ site: reader.site, key: reader.key, ...rangeQuery(id, Date.now(), before), limit: LIMIT })
       .then((page) => setPages((cur) => (before ? [...cur, page] : [page])))
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
@@ -57,7 +52,7 @@ export function ReaderHistory(props: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    loadReaderEvents({ site: reader.site, key: reader.key, hours: 24, limit: LIMIT })
+    loadReaderEvents({ site: reader.site, key: reader.key, ...rangeQuery(DEFAULT_HISTORY_RANGE, Date.now()), limit: LIMIT })
       .then((page) => {
         if (!cancelled) {
           setPages([page]);
@@ -78,7 +73,7 @@ export function ReaderHistory(props: Props) {
   // 등장 → 제거 를 한 줄로 묶어 "무엇이 언제부터 언제까지" 로 읽히게 한다. 최신이 위.
   const rows = pairEvents(events);
   const appearCount = events.filter((e) => e.kind === "APPEAR").length;
-  const rangeLabel = RANGES.find((r) => r.hours === hours)?.label ?? `${hours}시간`;
+  const step = historyRange(range).step;
 
   const download = () => downloadText(historyFileName(reader.reader || reader.key, new Date(now)), historyCsv(rows, snapshot));
 
@@ -100,16 +95,16 @@ export function ReaderHistory(props: Props) {
             기간
             <select
               className="rounded border border-slate-600 bg-slate-800 px-1.5 py-0.5 text-xs text-slate-100"
-              value={hours}
+              value={range}
               onChange={(e) => {
-                const next = Number(e.target.value);
-                setHours(next);
+                const next = e.target.value as HistoryRangeId;
+                setRange(next);
                 load(next);
               }}
               disabled={busy}
             >
-              {RANGES.map((r) => (
-                <option key={r.hours} value={r.hours}>
+              {HISTORY_RANGES.map((r) => (
+                <option key={r.id} value={r.id}>
                   {r.label}
                 </option>
               ))}
@@ -175,10 +170,10 @@ export function ReaderHistory(props: Props) {
           <button
             type="button"
             className="rounded bg-slate-700 px-3 py-1.5 text-sm font-semibold text-slate-100 hover:bg-slate-600 disabled:opacity-50"
-            onClick={() => load(hours, oldest)}
+            onClick={() => load(range, oldest)}
             disabled={busy || pages.length === 0}
           >
-            {busy ? "읽는 중…" : `이전 ${rangeLabel} 더`}
+            {busy ? "읽는 중…" : `이전 ${step} 더`}
           </button>
           <button
             type="button"

@@ -307,6 +307,31 @@ export function applyMessage(model: LiveModel, topic: string, payload: string, n
   return { ...model, readers, events, flashes: { ...model.flashes, [id]: { kind, at: now } }, received, samples };
 }
 
+/** 서버 이벤트 로그에서 가져온 잔상 재료 — 리더의 마지막 제거 이벤트. */
+export interface GhostSeed {
+  uid: string;
+  /** 들어낸 시각(ISO, 발행 쪽). */
+  at: string;
+  /** 서버가 그 이벤트를 받은 시각(ms). 잔상 만료의 기준. */
+  seenAt: number;
+}
+
+/**
+ * 새로 켠 화면의 잔상 되살리기. retained 상태에는 "무엇이 있었나" 가 없어(발행 쪽이 `lastUid` 를 실어 주지 않으면)
+ * 새로 고치면 잔상이 사라졌다. 서버 이벤트 로그의 리더별 마지막 제거를 씨앗으로 받아, 비어 있고 잔상이 없는 리더에만 채운다.
+ * 이미 잔상이 있거나(이 화면이 직접 봄) 태그가 놓인 리더는 건드리지 않는다. 바뀐 것이 없으면 같은 객체를 돌려준다.
+ */
+export function seedGhosts(readers: Record<string, ReaderState>, seeds: Record<string, GhostSeed>): Record<string, ReaderState> {
+  let out: Record<string, ReaderState> | null = null;
+  for (const [id, seed] of Object.entries(seeds)) {
+    const reader = readers[id];
+    if (!reader || reader.present || reader.lastUid || !seed.uid) continue;
+    out ??= { ...readers };
+    out[id] = { ...reader, lastUid: seed.uid, lastAt: seed.at, lastSeenAt: seed.seenAt };
+  }
+  return out ?? readers;
+}
+
 /** 잔상이 보일 때인가. 비어 있고, 잔상이 있고, 유지 시간 안. `ttlMs` 0 이면 끔. */
 export function ghostVisible(reader: ReaderState, now: number, ttlMs: number): boolean {
   if (ttlMs <= 0 || reader.present || !reader.lastUid || !reader.online) return false;

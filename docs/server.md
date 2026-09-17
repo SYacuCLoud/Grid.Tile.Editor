@@ -70,7 +70,8 @@
 | `GET` | `/api/live/format/:site` | 한 사업장 (파일이 없으면 기본 프로필을 `isDefault:true` 로) |
 | `PUT` | `/api/live/format/:site` | `{format, author}` 저장 (기본과 같으면 파일 삭제) |
 | `DELETE` | `/api/live/format/:site` | 기본(v1)으로 되돌리기 |
-| `GET` | `/api/live/events?site=&key=&hours=24&before=<ms>&limit=200` | 서버가 쌓은 등장 · 제거 이벤트, 최신부터. `before` 로 이전 구간을 이어 받음 |
+| `GET` | `/api/live/events?site=&key=&hours=24&before=<ms>&limit=200` | 서버가 쌓은 등장 · 제거 이벤트, 최신부터. `before` 로 이전 구간을 이어 받음. `since=<ms>` 를 주면 `hours` 대신 그 시각부터(화면의 `오늘` 은 브라우저 자정을 보냄) |
+| `GET` | `/api/live/events/ghosts?site=&hours=24` | 유지 시간 안에서 리더마다 마지막 이벤트가 제거인 것(`ghosts`). 현황판이 브로커에 붙을 때 받아 새로 고쳐도 잔상을 되살림 |
 | `GET` | `/api/live/events/status` | 이벤트 로그(파일 수 · 오늘 크기) 와 기록기(접속 · 건수) 상태. 상시 서비스는 별도 프로세스의 상태 파일을 읽음(`external:true`) |
 
 용지 설정(`page.paper`)을 포함한 페이지 내용 전체가 서버 파일과 이력 스냅샷에 그대로 저장·복원됩니다.

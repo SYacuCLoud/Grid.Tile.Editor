@@ -27,8 +27,11 @@ import {
   readerPaint,
   readerSkews,
   type ReaderState,
+  type GhostSeed,
+  seedGhosts,
   subscriptionTopics,
 } from "./liveState";
+import { loadGhostSeeds } from "./eventsClient";
 import { type LookupBook, type LookupSnapshot, pickSnapshot, resolveTag, tagLabel, tagLine } from "./lookup";
 import { loadFormatBook } from "./formatClient";
 import { FormatSettings } from "./FormatSettings";
@@ -177,6 +180,8 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
   const [reconnectNonce, setReconnectNonce] = useState(0);
   /** 식별 이력을 보고 있는 리더 id. 칸이나 목록 줄을 누르면 열린다. */
   const [historyId, setHistoryId] = useState<string | null>(null);
+  /** 서버 이벤트 로그에서 받은 잔상 씨앗(리더 id → 마지막 제거). 새로 고쳐도 잔상이 남게 한다. */
+  const [ghostSeeds, setGhostSeeds] = useState<Record<string, GhostSeed>>({});
   const revisionRef = useRef(-1);
 
   const brokerUrl = loc.broker ?? (typeof window === "undefined" ? "" : defaultBrokerUrl(window.location.hostname));
@@ -389,13 +394,15 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
     return map;
   }, [page, project]);
 
-  const readers = useMemo(() => Object.values(model.readers), [model.readers]);
+  // 잔상 씨앗을 덧입힌 리더 — 이 화면이 직접 본 잔상이 있으면 그것이 우선이고, 없는 빈 리더만 서버 로그의 마지막 제거로 채운다.
+  const readerMap = useMemo(() => seedGhosts(model.readers, ghostSeeds), [ghostSeeds, model.readers]);
+  const readers = useMemo(() => Object.values(readerMap), [readerMap]);
   const match = useMemo(() => (project && page ? matchReaders(project, page, readers) : { placed: [], unplaced: readers }), [page, project, readers]);
   const hosts = useMemo(() => Object.values(model.hosts).sort((a, b) => a.host.localeCompare(b.host)), [model.hosts]);
   const presentCount = match.placed.filter((p) => p.reader.present).length;
   const offlineCount = readers.filter((r) => !r.online).length;
   // 감시 PC 시계 편차. 하트비트로 잰 값을 리더별로 펴 두고, 칸의 경과 시간 · "n초 전" 을 이만큼 보정한다.
-  const skews = useMemo(() => readerSkews(model.readers, model.hosts), [model.hosts, model.readers]);
+  const skews = useMemo(() => readerSkews(readerMap, model.hosts), [model.hosts, readerMap]);
   const skewedHosts = useMemo(() => hosts.filter((h) => h.online && clockWarning(h.skewMs) !== ""), [hosts]);
 
   // 리더의 사업장에 맞는 스냅샷. 사업장을 안 정한 화면(`site=`)은 리더마다 다를 수 있다.
@@ -435,6 +442,22 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
     }
     navigate({ ...loc, ghost: String(minutes) });
   };
+  // 브로커에 붙을 때마다(처음 · 재접속) 서버 로그에서 유지 시간 안의 마지막 제거를 받아 잔상을 되살린다.
+  // 이벤트 API 가 없는 곳(정적 배포)이면 조용히 넘어간다 — 그때는 이 화면이 본 제거부터 쌓인다.
+  useEffect(() => {
+    if (connection !== "connected" || ghostTtl <= 0) return;
+    let cancelled = false;
+    loadGhostSeeds({ site: loc.site || undefined, hours: Math.max(1, Math.ceil(ghostTtl / 3_600_000)) })
+      .then((seeds) => {
+        if (!cancelled) setGhostSeeds(seeds);
+      })
+      .catch(() => {
+        if (!cancelled) setGhostSeeds({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, ghostTtl, loc.site, reconnectNonce]);
   const ghosts = useMemo(() => {
     const out: Record<string, string> = {};
     if (ghostTtl <= 0) return out;
@@ -460,7 +483,7 @@ function LiveBoardInner(props: { loc: Location; navigate: (next: Location) => vo
     const hit = match.placed.find((p) => p.cells.some((c) => c.x === point.x && c.y === point.y));
     if (hit) setHistoryId(hit.reader.id);
   };
-  const historyReader = historyId ? (model.readers[historyId] ?? null) : null;
+  const historyReader = historyId ? (readerMap[historyId] ?? null) : null;
   const historyPlace = (() => {
     if (!historyReader) return "";
     const placed = match.placed.find((p) => p.reader.id === historyReader.id);

@@ -9,13 +9,15 @@
  *
  * 이벤트 로그 (서버가 브로커를 구독해 쌓은 등장 · 제거)
  *   GET    /api/live/events?site=&key=&hours=24&before=<ms>&limit=200   최신부터. `before` 로 이전 구간을 이어 받는다
+ *                                                                        `since=<ms>` 를 주면 그 시각부터(`hours` 대신 — 화면의 "오늘")
  *   GET    /api/live/events/status          기록기 상태(접속 · 건수 · 파일)
+ *   GET    /api/live/events/ghosts?site=&hours=24   리더마다 마지막 이벤트가 제거인 것 — 새로 켠 화면이 잔상을 되살린다
  */
 
 import { join } from "node:path";
 
 import { defaultFormat, isDefaultFormat, MessageFormatError } from "../app/live/messageFormat";
-import type { EventLog } from "./eventLog";
+import { type EventLog, lastRemovals, MAX_QUERY_LIMIT } from "./eventLog";
 import { type EventLoggerHandle, readLoggerStatusFile } from "./eventLogger";
 import type { FormatStore } from "./formatStore";
 
@@ -89,10 +91,22 @@ export async function routeLive(store: LiveStore, request: LiveRequest, now: () 
       const logger = store.logger?.status() ?? readLoggerStatusFile(join(store.events.dir, "logger-status.json"), now());
       return { status: 200, body: { log: store.events.status(), logger, external: !store.logger } };
     }
+    if (second === "ghosts") {
+      // 잔상 되살리기: 유지 시간(hours) 안의 이벤트를 훑어 리더별 마지막이 제거인 것만 돌려준다.
+      const q = request.query;
+      const toMs = now();
+      const hours = Math.min(MAX_EVENT_HOURS, Math.max(1 / 60, num(q.get("hours"), DEFAULT_EVENT_HOURS)));
+      const result = store.events.query({ site: q.get("site")?.trim() || undefined, fromMs: toMs - hours * 3_600_000, toMs, limit: MAX_QUERY_LIMIT });
+      return { status: 200, body: { ghosts: lastRemovals(result.events), fromMs: result.fromMs, toMs, truncated: result.truncated } };
+    }
     if (second) return notFound();
     const q = request.query;
     const toMs = num(q.get("before"), now());
-    const hours = Math.min(MAX_EVENT_HOURS, Math.max(1, num(q.get("hours"), DEFAULT_EVENT_HOURS)));
+    // 범위는 `since`(그 시각부터 — 화면이 "오늘 0시" 를 자기 시간대로 계산해 보낸다) 가 우선, 없으면 `hours`.
+    // 어느 쪽이든 최대 폭 안으로 자른다.
+    const since = num(q.get("since"), Number.NaN);
+    const requested = Number.isFinite(since) ? Math.max(1 / 3600, (toMs - since) / 3_600_000) : Math.max(1, num(q.get("hours"), DEFAULT_EVENT_HOURS));
+    const hours = Math.min(MAX_EVENT_HOURS, requested);
     const fromMs = toMs - hours * 3_600_000;
     const result = store.events.query({
       site: q.get("site")?.trim() || undefined,
