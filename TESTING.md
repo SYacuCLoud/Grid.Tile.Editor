@@ -3,7 +3,7 @@
 Grid Tile Editor의 자동 테스트 실행 방법과 브라우저에서 직접 확인하는 수동 UI 테스트 절차입니다.
 기능을 수정했다면 관련 시나리오를 함께 갱신해 주세요.
 
-> 개요·설치·데이터 형식은 [README.md](./README.md)를 참고하세요.
+> 개요는 [README.md](./README.md), 설치·운영은 [docs/setup.md](./docs/setup.md), 데이터 형식은 [docs/data-format.md](./docs/data-format.md)를 참고하세요.
 
 ---
 
